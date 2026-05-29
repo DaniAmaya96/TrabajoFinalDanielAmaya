@@ -1,0 +1,1790 @@
+---
+title: "Beyond the Title: Causal Evidence of Land Formalization on Coca, Credit, and Violence in Colombia´s Peace Process implementation"
+bibliography: referencias.bib
+link-citations: true
+author: "Daniel Ricardo Amaya Alba"
+format:
+  pdf:
+    documentclass: article
+    fontsize: 11pt
+    geometry: "margin=3cm"
+    number-sections: true
+    colorlinks: true
+    fig-pos: "H"
+    tbl-pos: "H"
+    include-in-header:
+      text: |
+        \usepackage{booktabs}
+        \usepackage{float}
+        \usepackage{caption}
+        \usepackage{titling}
+        \setlength{\droptitle}{-2.5cm}
+        \pretitle{\begin{center}\large\bfseries}
+        \posttitle{\par\end{center}\vspace{0.5em}}
+        \preauthor{\begin{center}\normalsize}
+        \postauthor{\end{center}\vspace{0em}}
+        \predate{\vspace{-2em}}
+        \postdate{\vspace{0em}}
+        \renewcommand{\tablename}{Tabla}
+        \renewcommand{\figurename}{Figura}
+        \AtBeginDocument{\renewcommand{\tableautorefname}{Tabla}}
+crossref:
+  fig-prefix: "Figura"
+  tbl-prefix: "Tabla"
+execute:
+  echo: false
+  warning: false
+  message: false
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+```{r tab-desc}
+#| include: false
+# Antes que cualquier cosa  vamos a ajustar nuestra base de datos y cargar todas las librarias necesarias para el análisis.
+
+library(tidyverse)
+library(scales)
+library(did)
+library(patchwork)
+library(modelsummary)
+library(kableExtra)
+library(fixest)
+library(haven)
+library(knitr)
+# ==============================================================================
+# Cargar datos
+# ==============================================================================
+
+panel <- read_csv("panel_tierras_violencia_final.csv", show_col_types = FALSE)
+
+
+# ==============================================================================
+# Creando variable G_i para el diseño de DiD escalonado Callaway y Sant'Anna (2021)
+# =============================================================================
+
+#Para generar la variable G_i primero hago lo siguiente. Ordeno el panel por municipio y año usando el codigo del municipio dado que hay municipios que se llaman igual pero están en departamentos distintos. Luego, para cada municipio, busco el año de tratamiento como el primer año en que se formalizó alguna hectárea (c>0). Si un municipio nunca se formalizó, asigno G_i=inf. 
+panel_tratamiento <- panel %>%
+  arrange(cod_municipio, anio) %>%
+  group_by(cod_municipio) %>%
+  mutate(
+     G_i_candidato = min(c(anio[hectareas_formalizadas > 0], Inf), na.rm = TRUE),
+    #Luego creo la variable de tratamiento D_it como 1 si t >= G_i y 0 en caso contrario. Luego defino la ventana de consolidacion institucional cómo (G_icandidato+2), es decir dos años después del año de tratamiento candidato, esta ventana quiere decir que el tratamiento se consolida dos años después de la formalización, lo que es consistente con la literatura que encuentra efectos de la formalización a mediano plazo (De Janvry et al., 2014; Angrist & Kugler, 2008). 
+    en_ventana = anio >= G_i_candidato & anio <= ( G_i_candidato  + 2),
+    #A continuación, calculamos la intensidad real del tratamiento o dosis (D_i). Esta se define como la suma continua de las hectáreas formalizadas estrictamente durante la ventana de consolidación institucional de 3 años.Para el diseño de Diferencias en Diferencias (DiD), no asumiremos que cualquier  formalización mayor a cero constituye un tratamiento efectivo. La literatura  advierte que se requiere un choque de política de magnitud significativa para poder detonar y observar efectos causales estructurales (Deininger, 2003; De Soto, 2000).Por lo tanto, utilizaremos la dosis calculada (D_i) para asignar a los municipios a su respectiva cohorte de tratamiento (G_i) basándonos en diferentes umbrales de intensidad. El umbral principal para nuestra estimación base será de 10 hectáreas formalizadas (G_i_10).Adicionalmente, creamos cohortes con umbrales más exigentes (20, 40 y 100 hectáreas). Esto permitirá realizar  tests de sensibilidad bajo el estimador de Callaway y Sant'Anna (2021), evaluando si el ATT se mantiene, se amplifica o desaparece. En mi definición Las unidades que nunca formalizan serán grupo de control puro (G_i = 0). Las unidades que formalizan, pero no logran superar el umbral de intensidad evaluado, se codifican como NA para excluirlas de la muestra y evitar que contaminen el grupo de control con tratamientos débiles.
+    
+    D_i = sum(hectareas_formalizadas[en_ventana], na.rm = TRUE)
+    ) %>%
+  ungroup() %>%
+  mutate(
+    # D. Reglas de asignación estricta para tus distintos tests de sensibilidad
+     # Umbral 1: Al menos 10 hectáreas
+    G_i_10 = case_when(
+      G_i_candidato >= 2017 & G_i_candidato <= 2021 & D_i >= 10 ~ G_i_candidato,
+      is.infinite(G_i_candidato)                           ~ 0L, 
+      TRUE                                            ~ NA_real_
+    ),
+    
+    # Umbral 2: Al menos 20 hectáreas
+    G_i_20 = case_when(
+      G_i_candidato >= 2017 & G_i_candidato <= 2021 & D_i >= 20 ~ G_i_candidato,
+      is.infinite(G_i_candidato)                           ~ 0L, 
+      TRUE                                            ~ NA_real_
+    ),
+    
+    # Umbral 3: Al menos 40 hectáreas
+    G_i_40 = case_when(
+      G_i_candidato >= 2017 & G_i_candidato <= 2021 & D_i >= 40 ~ G_i_candidato,
+      is.infinite(G_i_candidato)                           ~ 0L, 
+      TRUE                                            ~ NA_real_
+    ),
+    
+    # Umbral 4: Al menos 100 hectáreas
+    G_i_100 = case_when(
+      G_i_candidato >= 2017 & G_i_candidato <= 2021 & D_i >= 100 ~ G_i_candidato,
+      is.infinite(G_i_candidato)                            ~ 0L, 
+      TRUE                                             ~ NA_real_
+    )
+  )
+
+# Depuro la base y creo ID númerico
+panel_analisis <- panel_tratamiento %>%
+  filter(!is.na(G_i_10)) %>%
+  mutate(id_numerico = as.integer(as.factor(cod_municipio)))
+
+
+# Construyendo covariables para hacer IPW en cada especificación de cada 
+# outcom evaluado con el estimador de Callaway y Sant'Anna (2021)
+
+# Construyo  covariables pre-tratamiento relevantes para para cada outcome. Luego, calculo las probabilidades de tratamiento y las utilizo para generar los pesos IPW necesarios para el estimador de Callaway y Sant'Anna (2021).Los controles pretratamiento tambien se usan para calcula \hat{m} en el estimador doblemente robusto, por lo que es importante incluirlos en ambos casos. Para cada outcome, selecciono covariables relevantes basadas en la literatura y en la disponibilidad de datos, asegurando que sean pre-tratamiento para evitar problemas de endogeneidad.
+
+
+# A. Geografía e Institucionalidad (Invariantes / Fijas)
+#Estas variables capturan el "ADN" estructural del municipio. La ruralidad y la distancia a la capital (discapital) determinan los costos de transacción y la presencia histórica del Estado. Incluir PDET y PNIS es fundamental para evitar sesgos por "tratamientos simultáneos" en el posconflicto, ya que controlan por la vulnerabilidad estructural que hizo que un municipio fuera priorizado para estas políticas en primer lugar.
+
+geo <- panel_analisis %>%
+  filter(anio == 2016) %>%
+  transmute(id_numerico, pdet, discapital, indrural, pnis) 
+
+# B. Escala y Capacidad Estatal (Fijadas en 2016)
+#Para evitar el sesgo de "mal control", la escala demográfica y la capacidad fiscal se fijan en 2016, justo antes de nuestra primera cohorte de tratamiento (2017). Transformar población y transferencias (SGP) en logaritmos suaviza asimetrías extremas en la distribución. El desempeño fiscal controla por la eficiencia institucional local que podría catalizar o entorpecer los efectos de la formalización de tierras.
+
+demo_2016 <- panel_analisis %>%
+  filter(anio == 2016) %>%
+  transmute(
+    id_numerico,
+    ln_pobl_rur_2016 = log1p(pobl_rur),
+    ln_sgp_2016      = log1p(SGP_total_mill)
+  )
+
+# C. Trayectorias Históricas Base (Promedio 2012-2015)
+
+#Promediar el periodo 2012-2015 aísla la carga estructural de la violencia y las economías ilegales, limpiando choques idiosincráticos. Adicionalmente, calculamos el Delta para capturar la trayectoria o flujo de estas variables.
+
+hist_pre <- panel_analisis %>%
+  filter(anio %in% 2012:2015) %>%
+  arrange(cod_municipio, anio) %>%
+  group_by(id_numerico) %>%
+  summarise(
+    # --- NIVEL ESTRUCTURAL (Promedios) ---
+    homic_pre             = coalesce(mean(tasa_homicidios_md,        na.rm = TRUE), 0),
+    ln_belic_pre          = coalesce(mean(log1p(n_acciones_belicas), na.rm = TRUE), 0),
+    ln_hectareas_coca_pre = coalesce(mean(log1p(hectareas_coca),     na.rm = TRUE), 0),
+    coca_pre_raw          = coalesce(mean(hectareas_coca,            na.rm = TRUE), 0),
+    ln_credito_peq_pre    = coalesce(mean(log1p(vrf_peq_pc),         na.rm = TRUE), 0),
+    .groups = "drop"
+  ) %>%
+  mutate(ln_homic_pre = log1p(homic_pre))  # log de la tasa para estabilidad del IPW
+    
+
+# Consolidamos la matriz y la pegamos al panel
+X_muni <- geo %>%
+  left_join(demo_2016, by = "id_numerico") %>%
+  left_join(hist_pre, by = "id_numerico")
+
+panel_analisis <- panel_analisis %>%
+  select(-any_of(names(X_muni)[-1])) %>%
+  left_join(X_muni, by = "id_numerico") %>%
+  mutate(
+    id_numerico         = as.integer(as.factor(cod_municipio)),
+    DF_desemp_fisc      = ifelse(DF_desemp_fisc == 0, NA, DF_desemp_fisc), ##La variable de desempeño fiscal del DNP presentó un único valor de 0 (municipio Sucre, Sucre, año 2021) que es inconsistente con el rango histórico del municipio (51–65 en años adyacentes) y que reportes técnicos del DNP confirman como faltante mal codificado. La observación fue recodificada como missing.
+    Y_ln_coca           = log1p(hectareas_coca),#efiniendo variables Y  (La variable de homicidios se modela en niveles usando 'tasa_homicidios_md') por su parte coca y credito se usan en esacala logaritmica 
+    Y_ln_credito_peq_pc = log1p(vrf_peq_pc),
+    Y_ln_vrf_mujer      = log1p(vrf_mujer_rural) # Valor del crédito a mujeres rurales (FINAGRO), escala log
+  )
+
+
+
+# Vectores de Covariables para los Modelos
+
+X_Violencia <- ~ pdet + discapital + indrural +
+                  ln_pobl_rur_2016 + ln_sgp_2016 +
+                  ln_homic_pre + ln_belic_pre + ln_hectareas_coca_pre
+
+X_Credito   <- ~ pdet + discapital + indrural +
+                  ln_pobl_rur_2016 + ln_sgp_2016 +
+                  ln_homic_pre + ln_belic_pre + ln_hectareas_coca_pre
+
+# Covariables sin PDET para la muestra restringida (sin PNIS & sin PDET):
+# al filtrar pdet==0 la variable pierde variación y generaría colinealidad.
+X_Credito_nopdet <- ~ discapital + indrural +
+                  ln_pobl_rur_2016 + ln_sgp_2016 +
+                  ln_homic_pre + ln_belic_pre + ln_hectareas_coca_pre
+
+
+X_Coca      <- ~ pdet + discapital + indrural +
+                  ln_pobl_rur_2016 + ln_sgp_2016 +
+                  ln_homic_pre + ln_belic_pre   
+
+```
+
+
+# Introducción
+
+La extrema informalidad en la tenencia rural de la tierra es uno de los rasgos estructurales persistentes de la economía política colombiana. Con un coeficiente de Gini rural cercano a 0.89 [@igac2024], uno de los más altos del mundo, la precariedad en los derechos de propiedad no es una cuestión meramente administrativa. De acuerdo con  @gutierrez2025 la desigualdad agraria está históricamente vinculada al origen del conflicto armado del país, además la literatura económica reconoce que la inseguridad en la tenencia de la tierra restringe la inversión productiva [@besley1995] y el acceso al crédito formal [@deSoto2000].
+
+Para abordar este problema, el Acuerdo de Paz de 2016 entre el Gobierno colombiano y las FARC-EP estableció en su Punto 1 la Reforma Rural Integral (RRI). Aunque esta reforma abarca un conjunto amplio de intervenciones estructurales para el campo, su componente de tierras se articula alrededor de tres instrumentos principales: i). la adjudicación de tres millones de hectáreas a través del Fondo de Tierras, ii). la formalización masiva de siete millones de hectáreas de pequeña y mediana propiedad y iii)  los Programas de Desarrollo con Enfoque Territorial (PDET). Para operativizar estas metas, el Estado creó la Agencia Nacional de Tierras (ANT) mediante el Decreto Ley 2363 de 2015, dotándola en 2017 de las herramientas legales para ejecutar un programa de formalización masiva liderado por la oferta, mediante un barrido predial masivo. 
+
+Los avances en las medidas de la RRI   han sido asimétricos, con corte a 2023 se habían formalizado 2.494.000 hectáreas equivalente al 35,6% de la meta, mientras que del Fondo de Tierras solo se habían adjudicado 33.327 hectáreas equivalente a un 1,1%. Dado que el componente redistributivo de la adjudicación empezó a mostrar avances significativos desde 2023, este estudio evalúa exclusivamente el efecto de la formalización.
+
+```{r}
+#| eval: false
+#| include: false
+# Viendo hectareas adjudicadas y formalizadas con corte a 2023
+resultado <- panel %>%
+  filter(anio >= 2016 & anio <= 2023) %>%
+  group_by(anio) %>%
+  summarise(
+    total_formalizadas = sum(hectareas_formalizadas, na.rm = TRUE),
+    total_adjudicadas = sum(hectareas_adjudicadas, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(anio = as.character(anio)) %>%  
+  bind_rows(
+    summarise(.,
+      anio = "Total",
+      total_formalizadas = sum(total_formalizadas),
+      total_adjudicadas = sum(total_adjudicadas)
+    )
+  )
+
+resultado
+```
+
+La teoría de cambio del Decreto Ley 902 de 2017, que adopta las medidas para la implementacón de la RRI, postula que la formalización masiva debe traducirse en bienestar rural operando sobre tres dimensiones: la integración financiera al habilitar la tierra como colateral crediticio, la reducción de economías ilícitas al elevar el costo de oportunidad del cultivo de coca y condicionar la titulación a la legalidad, y la pacificación territorial mediante la consolidación de la presencia estatal. Adicionalmente, la RRI incorpora un enfoque de género transversal que prioriza a las mujeres rurales, y el Decreto mencionado  establece como medida la titularidad compartida obligatoria para los hogares conformados por parejas. 
+
+A pesar de la centralidad de esta política en la implementación del Acuerdo de Paz y de sus pretensiones ambiciosas, no existe evidencia causal  sobre sus efectos. Para llenar este vacío, este estudio responde la pregunta: ¿Cuál es el efecto causal de la política de formalización de tierras liderada por la ANT sobre las tasas de homicidio municipal (general y de líderes sociales), las hectáreas cultivadas con coca y el valor del crédito formalmente entregado a pequeños productores y a mujeres rurales en Colombia en el periodo post-acuerdo?
+
+# Marco Teorico e Hipotésis 
+
+Este trabajo contribuye a la literatura sobre derechos de propiedad, desarrollo rural y construcción de paz. Teóricamente, @deSoto2000 postula que la formalización moviliza el capital muerto al habilitar canales de inversión, colateral crediticio y mercado de tierras, aunque @besley2010 advierte que su eficacia depende de factores institucionales, financieros y de poder local. La evidencia empírica muestra resultados mixtos, por un lado  @Galiani2010 cuestionan el canal crediticio al hallar efectos nulos en colateralización y por otro,  @goldstein_udry2008 demuestran que el poder político local condiciona los retornos del título. En Colombia, donde priman la concentración de la tierra y la captura clientelar [@faguet2020; @gutierrez2025], es clave preguntarse si el canal del crédito formal logra activarse especialmente en medio de un proceso de construcción de paz y si tiene efectos diferenciales dadas las medidas tomadas para promover la inclusión financiera de mujeres rurales.
+
+En cuanto a las economías ilícitas, estudios como el de @MUNOZMORA2018268  argumentan que la formalización reduce los cultivos de coca mediante mecanismos de disuasión jurídica y sustitución condicionada. Sin embargo, el trabajo cualitativo reciente de  @thomson2022 advierte que dichos resultados cuantitativos adolecen de problemas de identificación, al confundir los efectos marginales de la titulación con los impactos simultáneos de la erradicación forzada y los programas del Plan Colombia, ademas refutan este mecanismo causal señalando que la seguridad ya opera informalmente. Entender el efecto marginal de la formalización en el contexto del post-acuerdo es fundamental para nutrir el entendimiento y validez de su uso como política que busca reducir los cultivos de uso ilícito. 
+
+Respecto a la violencia letal, la literatura identifica dos mecanismos antagónicos. El mecanismo pacificador sostiene que la titulación reduce la violencia al debilitar el apoyo insurgente y consolidar al Estado [@Albertus2020; @albertus_kaplan2013]. Por otro lado, el mecanismo de contrarreforma evidencia que la asignación de derechos exacerba la letalidad cuando amenaza rentas de élites o actores armados [@ahmed2025]. @castaneda2020 reconcilian ambos enfoques, sugiriendo que la pacificación solo ocurre si se rompe el clientelismo local previo. En el post-acuerdo colombiano este análisis se vuelve relevante debido a los vacíos territoriales dejados por las FARC y el asesinato de líderes sociales  [@prem2018].
+
+Teniendo en cuenta el marco teórico este estudio evalúa tres hipótesis . En primer lugar ($H_1$), se postula que la formalización reduce las hectáreas de coca en municipios cultivadores mediante la activación de mecanismos de disuasión jurídica y sustitución condicionada. En contraste con la visión institucional optimista de @deSoto2000, la segunda hipótesis ($H_2$) anticipa un efecto nulo de la formalización sobre el acceso al crédito formal, tanto de pequeños productores como de mujeres rurales, dado el contexto de alta fricción institucional y la evidencia de que en zonas rurales el crédito ya opera con base en certificados de posesión informales sin requerir título pleno [@thomson2022]. Finalmente, la tercera hipótesis ($H_3$) plantea que la titulación reduce las tasas de homicidio general y de líderes sociales al integrar al campesinado y consolidar la presencia del Estado bajo el mecanismo pacificador [@Albertus2020], pues la formalización al no representar grandes cambios en la composición de la tenencia de la tierra no necesariamente debe desencadenar un efecto de contrareforma.
+
+# Datos
+
+Para evaluar el impacto de la política de formalización de la propiedad rural se construyó  un panel balanceado a nivel municipal con periodicidad anual para el periodo 2012–2023.  La base de datos cubre 1.121 municipios de Colombia, lo que resulta en un total de 13.452 observaciones.
+
+La  variable que define el tratamiento corresponde al número de hectáreas formalizadas por municipio año. Esta información proviene de los registros administrativos de la ANT. Dado que los efectos de la titulación suelen expresarse a mediano plazo, la dosis de tratamiento se computa como la suma de hectáreas con folio efectivamente registrado en una ventana de consolidación de tres años posteriores a la intervención inicial $(D_i = \sum_{\tau = t_0}^{t_0 + 2} \text{hectáreas formalizadas}_\tau)$ y se definen como controles a los nunca tratados. Esta metodología permite capturar tanto el margen extensivo de la política como la intensidad de la dosis recibida por cada municipio.
+
+Las variables de resultado se estructuran en torno a los tres canales teóricos de la investigación. En primer lugar, la dimensión de violencia letal se aproxima a través de la tasa de homicidios por cada 100.000 habitantes provista por el Ministerio de Defensa, complementada con los registros de asesinatos de líderes sociales del Programa Somos Defensores. En segundo lugar, el efecto sobre los cultivos de coca se mide mediante el logaritmo de las hectáreas reportadas por el SIMCI (UNODC). En tercer lugar, el canal de integración financiera se aproxima mediante el logaritmo del valor del crédito agropecuario desembolsado a pequeños productores y a mujeres rurales, con base en  información de FINAGRO  disponible en el Panel del CEDE. Adicionalmente, el análisis incorpora covariables extraídas del mismo panel, lo que permite ajustar las estimaciones por características estructurales predeterminadas que podrían sesgar la focalización de la política o los resultados de interés.
+
+# Evidencia descriptiva 
+
+Esta sección presenta la evidencia descriptiva que fundamenta empíricamente el estudio. Partiendo de la \autoref{tab:balance}, que reporta el balance previo al tratamiento (2014–2016) es evidente que la formalización no se distribuyó aleatoriamente en el territorio nacional. De acuerdo con la \autoref{tab:balance} Los municipios que eventualmente fueron intervenidos, definidos como aquellos con  ($D_i\geq10$ hectáreas) son estructuralmente distintos a los de control, con diferencias estadísticamente significativas al 1%. Se  caracterizan por ser  más rurales, periféricos y dependientes de transferencias fiscales. Esto confirma la priorización institucional explícita hacia zonas históricamente marginadas.
+ 
+Al analizar las tres variables de interés la evidencia descriptiva revelan coexistencia territorial entre  exclusión financiera, cultivos de coca y violencia. Durante la línea base, los municipios tratados registraron una tasa de homicidios 34% mayor y una tasa de asesinatos de líderes sociales casi tres veces superior a la del grupo de control. De manera simultánea, estas dinámicas de conflicto coexisten con una cantidad de hectáreas de coca que triplica a la de los municipios no intervenidos, al tiempo que exhiben un déficit en el acceso al crédito agropecuario formal per-cápita. Los datos evidencian empíricamente que la precariedad en los derechos de propiedad, las rentas ilícitas y la violencia letal convergen de  en los mismos municipios.Es precisamente dicha convergencia en los datos lo que justifica y motiva la pregunta central de esta investigación.
+
+Ahora bien, responder a este interrogante exige superar un reto empírico,  pues la estrecha interrelación y los profundos desbalances  invalidan comparaciones ingenuas y bajo un diseño de DiD alertan baja plausibilidad de cumplir el supuesto de tendencias paralelas incondicionales, a lo que se añade la adopción escalonada del tratamiento. Por ello, para aislar el impacto de la formalización el diseño metodológico adopta el estimador doblemente robusto de @callaway2021.
+
+# Metodología 
+
+Para contrastar empíricamente las hipótesis formuladas, la estrategia de identificación implementa el estimador de diferencias en diferencias propuesto por @callaway2021 bajo la especificación doblemente robusta con nunca tratados como controles. Esta elección metodológica obedece a que el despliegue territorial de la política de formalización exhibe una adopción escalonada en el tiempo y a que se anticipan efectos de tratamiento dinámicos y heterogéneos. Al adoptar este marco analítico, la estimación elude el sesgo por ponderaciones negativas y malas comparaciones inherente a los estimadores tradicionales de TWFE superando así los problemas de pesos negativos y malas comparaciones señalados por la literatura econométrica reciente [@Bacon2021; @Sun2020; @Chaisemartin2020].
+
+En este sentido, la especificación empírica a estimar para cada variable de resultado $Y$ es la siguiente:
+
+$$
+ATT^{nev}_{dr}(g,t;\delta) = \mathbb{E}\left[
+\left(
+\frac{G_g}{\mathbb{E}[G_g]}
+-
+\frac{\dfrac{p_g(X)C}{1 - p_g(X)}}{\mathbb{E}\left[\dfrac{p_g(X)C}{1 - p_g(X)}\right]}
+\right)
+\left(
+Y_t - Y_{g-\delta-1} - m^{nev}_{g,t,\delta}(X)
+\right)
+\right]
+$$
+
+Donde se caputra el Efecto Promedio del Tratamiento sobre los Tratados para la cohorte $g$ evaluada en el período $t$. Para operativizar esta especificación el tratamiento no se asume como cualquier nivel marginal de titulación. Sea $t_0$ el año de la primera titulación en el municipio $i$, la dosis acumulada $(D_i)$ en una ventana de consolidación de tres años se define como $(D_i = \sum_{\tau = t_0}^{t_0 + 2} \text{hectáreas formalizadas}_\tau)$. 
+
+La asignación del municipio a la cohorte tratada $(G_{g,i})$ obedece formalmente a un umbral de intensidad $k$ y a una restricción temporal que evalúa exclusivamente a las cohortes intervenidas entre 2017 y 2021, garantizando así la verificabilidad de la ventana de consolidación en el panel de datos, salvo por la cohorte tratado en 2021 , para la cual el truncamiento de la serie solo permite observar una ventana de dos años. Se define como grupo de control a los nunca tratados, es decir, exclusivamente a los municipios con cero hectáreas formalizadas, excluyendo de la estimación aquellos con dosis positivas pero inferiores al umbral $k$ para evitar sesgos por contaminación de tratamientos débiles
+
+$$
+G_{g,i} =
+\begin{cases}
+t_0 & \text{si } D_i \ge k \space \text{y} \space \space t_0 \in [2017,2021] \\
+0 & \text{si } D_i = 0 \quad (\text{Control puro: } C) \\
+NA & \text{si } (0 < D_i < k) \ \lor \ (t_0 < 2017) \ \lor \ (t_0 > 2021) \quad (\text{Excluidos})
+\end{cases}
+$$
+
+La estimación principal emplea un umbral $k = 10$ hectáreas, como prueba de sensibilidad se ejecutan otros cortes de umbrales.
+
+Para corregir el sesgo de selección endógeno derivado de la priorización territorial de la ANT, la ecuación incorpora un vector de covariables estructurales predeterminadas $(X)$. La doble robustez del estimador garantiza consistencia siempre que al menos uno de los modelos auxiliares, el propensity score $p_g(X)$ o la regresión de resultados $m^{nev}_{g,t,\delta}(X)$, esté correctamente especificado [@callaway2021].
+
+La validez del diseño de @callaway2021 descansa en tres supuestos, soporte común, no anticipación y tendencias paralelas condicionales. La no anticipación es plausible para el crédito por las rigideces del sistema financiero formal, pero más débil en violencia y coca, donde los actores podrían reaccionar ante la inminencia del barrido predial. Como la focalización de la ANT no fue aleatoria sino guiada por el conflicto, las tendencias paralelas se condicionan a un vector de covariables ($X$) que incorpora los niveles de línea base (2012–2015) de la tasa de homicidios, las acciones bélicas y, cuando corresponde, el rezago de cultivos de coca, restringiendo la comparación a municipios con trayectorias de conflicto preexistentes comparables. 
+
+La estimación también enfrenta el supuesto de SUTVA, por un lado puede haber posibles spillovers espaciales hacia vecinos no tratados, por otro lado, el hecho de que la formalización operó como un bundle   con otros programas del Acuerdo de Paz. Para acotarlo, todas las especificaciones condicionan por estatus PDET y el canal de coca se estima en dos versiones (solo cocaleros y excluyendo PNIS), así mismo el modelo de credito en mujeres rurales se estima excluyendo municipios PNIS y PDET. Aún así los parámetros no captura la formalización en un vacío institucional, sinosu efecto marginal dentro de la arquitectura de implementación de la RRI en el marco del post-acuerdo.
+
+Finalmente, como mecanismo para evaluar la sensibilidad estructural del diseño las estimaciones  se contrastan implementando el estimador de diferencias en diferencias escalonadas propuesto por @Sun2020.
+
+# Resultados 
+
+```{r}
+#| include: false
+library(did)
+library(ggplot2)
+library(fixest)
+
+
+# Estimando los modelos
+
+#Primero voy a crear un panel para analisis con solo municipios cocaleros. Filtramos la base para quedarnos SOLO con municipios cocaleros
+panel_analisis_coca <- panel_analisis %>% filter(coca_pre_raw > 0)
+# Creamos otra muestra estricta para probar el mecanismo (Solo ANT, sin PNIS)
+panel_analisis_coca_sin_pnis <- panel_analisis_coca %>% filter(pnis == 0)
+
+#___________________________________________________
+#Haciendo TWFE 
+#___________________________________________________
+
+# Creamos el tratamiento estático (D_it) y el tiempo relativo (rel_year)
+panel_analisis <- panel_analisis %>%
+  mutate(
+    # Dummy clásica de DiD: 1 si está en año de tratamiento o posterior
+    D_it = if_else(G_i_10 > 0 & anio >= G_i_10, 1, 0),
+    # Tiempo relativo: -1000 para los nunca tratados (para usarlo de referencia)
+    rel_year = if_else(G_i_10 == 0, -1000, anio - G_i_10)
+  )
+
+# Hacemos lo mismo para las bases restringidas de coca
+panel_analisis_coca <- panel_analisis_coca %>%
+  mutate(
+    D_it = if_else(G_i_10 > 0 & anio >= G_i_10, 1, 0),
+    rel_year = if_else(G_i_10 == 0, -1000, anio - G_i_10)
+  )
+
+panel_analisis_coca_sin_pnis <- panel_analisis_coca_sin_pnis %>%
+  mutate(
+    D_it = if_else(G_i_10 > 0 & anio >= G_i_10, 1, 0),
+    rel_year = if_else(G_i_10 == 0, -1000, anio - G_i_10)
+  )
+
+# Muestra restringida para el canal de crédito a mujeres rurales:
+# excluye municipios con PNIS y con PDET para aislar la formalización pura.
+# Se recodifica id_numerico tras filtrar (consistencia del estimador CS).
+panel_analisis_mujer_sin <- panel_analisis %>%
+  filter(pnis == 0, pdet == 0) %>%
+  mutate(
+    id_numerico = as.integer(as.factor(cod_municipio)),
+    D_it = if_else(G_i_10 > 0 & anio >= G_i_10, 1, 0),
+    rel_year = if_else(G_i_10 == 0, -1000, anio - G_i_10)
+  )
+#Modelos Violencia
+
+TWFE_TasaHomicidios_simple <- feols(
+  tasa_homicidios_md ~ D_it + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) + 
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis, 
+  cluster = ~id_numerico
+)
+
+TWFE_TasaHomicidios_es <- feols(
+  tasa_homicidios_md ~ i(rel_year, ref = c(-1, -1000)) + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) + 
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis, 
+  cluster = ~id_numerico
+)
+
+TWFE_TasaLideres_simple <- feols(
+  tasa_lideres_asesinados_SD ~ D_it + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) + 
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis, 
+  cluster = ~id_numerico
+)
+
+TWFE_TasaLideres_es <- feols(
+  tasa_lideres_asesinados_SD ~ i(rel_year, ref = c(-1, -1000)) + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) + 
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis, 
+  cluster = ~id_numerico
+)
+
+
+#Modelos Credito Finagro Pequeños Productores 
+
+TWFE_Credito_simple <- feols(
+  Y_ln_credito_peq_pc ~ D_it + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) + 
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis, 
+  cluster = ~id_numerico
+)
+
+TWFE_Credito_es <- feols(
+  Y_ln_credito_peq_pc ~ i(rel_year, ref = c(-1, -1000)) +
+    i(anio, pdet, ref = 2016) +
+    i(anio, discapital, ref = 2016) +
+    i(anio, indrural, ref = 2016) +
+    i(anio, ln_pobl_rur_2016, ref = 2016) +
+    i(anio, ln_sgp_2016, ref = 2016) +
+    i(anio, ln_homic_pre, ref = 2016) +
+    i(anio, ln_belic_pre, ref = 2016) +
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis,
+  cluster = ~id_numerico
+)
+
+
+#Modelo Credito Valor Mujeres Rurales (global)
+
+TWFE_VrfMujer_simple <- feols(
+  Y_ln_vrf_mujer ~ D_it +
+    i(anio, pdet, ref = 2016) +
+    i(anio, discapital, ref = 2016) +
+    i(anio, indrural, ref = 2016) +
+    i(anio, ln_pobl_rur_2016, ref = 2016) +
+    i(anio, ln_sgp_2016, ref = 2016) +
+    i(anio, ln_homic_pre, ref = 2016) +
+    i(anio, ln_belic_pre, ref = 2016) +
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis,
+  cluster = ~id_numerico
+)
+
+TWFE_VrfMujer_es <- feols(
+  Y_ln_vrf_mujer ~ i(rel_year, ref = c(-1, -1000)) +
+    i(anio, pdet, ref = 2016) +
+    i(anio, discapital, ref = 2016) +
+    i(anio, indrural, ref = 2016) +
+    i(anio, ln_pobl_rur_2016, ref = 2016) +
+    i(anio, ln_sgp_2016, ref = 2016) +
+    i(anio, ln_homic_pre, ref = 2016) +
+    i(anio, ln_belic_pre, ref = 2016) +
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis,
+  cluster = ~id_numerico
+)
+
+#Modelo Credito Valor Mujeres Rurales (muestra restringida: sin PNIS & sin PDET)
+# Se omite i(anio, pdet) porque pdet==0 en toda la submuestra (sin variación).
+
+TWFE_VrfMujerSin_simple <- feols(
+  Y_ln_vrf_mujer ~ D_it +
+    i(anio, discapital, ref = 2016) +
+    i(anio, indrural, ref = 2016) +
+    i(anio, ln_pobl_rur_2016, ref = 2016) +
+    i(anio, ln_sgp_2016, ref = 2016) +
+    i(anio, ln_homic_pre, ref = 2016) +
+    i(anio, ln_belic_pre, ref = 2016) +
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis_mujer_sin,
+  cluster = ~id_numerico
+)
+
+TWFE_VrfMujerSin_es <- feols(
+  Y_ln_vrf_mujer ~ i(rel_year, ref = c(-1, -1000)) +
+    i(anio, discapital, ref = 2016) +
+    i(anio, indrural, ref = 2016) +
+    i(anio, ln_pobl_rur_2016, ref = 2016) +
+    i(anio, ln_sgp_2016, ref = 2016) +
+    i(anio, ln_homic_pre, ref = 2016) +
+    i(anio, ln_belic_pre, ref = 2016) +
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis_mujer_sin,
+  cluster = ~id_numerico
+)
+
+
+#Modelo Cultivos Coca
+
+
+
+TWFE_Coca_simple <- feols(
+  Y_ln_coca ~ D_it + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis_coca, 
+  cluster = ~id_numerico
+)
+
+TWFE_Coca_es <- feols(
+  Y_ln_coca ~ i(rel_year, ref = c(-1, -1000)) + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis_coca, 
+  cluster = ~id_numerico
+)
+
+TWFE_Coca_Sin_PNIS_simple <- feols(
+  Y_ln_coca ~ D_it + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis_coca_sin_pnis, 
+  cluster = ~id_numerico
+)
+
+TWFE_Coca_Sin_PNIS_es <- feols(
+  Y_ln_coca ~ i(rel_year, ref = c(-1, -1000)) + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) | id_numerico + anio,
+  data = panel_analisis_coca_sin_pnis, 
+  cluster = ~id_numerico
+)
+
+#_______________________________________________
+#Modelos Callaway 
+#________________________________________________
+
+
+#Modelos Violencia 
+
+TasaHomicidios10has <- att_gt(
+  yname         = "tasa_homicidios_md",
+  gname         = "G_i_10",
+  idname        = "id_numerico",
+  tname         = "anio",
+  xformla       = X_Violencia,
+  data          = panel_analisis,
+  panel         = TRUE,          
+  est_method    = "dr", # doblemente robusto
+  control_group = "nevertreated",
+  base_period   = "universal",
+  bstrap        = TRUE, # se por bootstrap
+  biters        = 1000, # iteraciones del bootstrap
+  cband         = TRUE, # bandas de confianza simultáneas
+  alp           = 0.05, # nivel de significancia: IC al 95%
+  anticipation  = 0,  
+  clustervars   = "id_numerico"     
+)
+
+TasaLideres10has <- att_gt(
+  yname         = "tasa_lideres_asesinados_SD",
+  gname         = "G_i_10",
+  idname        = "id_numerico",
+  tname         = "anio",
+  xformla       = X_Violencia,
+  data          = panel_analisis,
+  panel         = TRUE,          
+  est_method    = "dr", # doblemente robusto
+  control_group = "nevertreated", 
+  base_period   = "universal",
+  bstrap        = TRUE, # se por bootstrap
+  biters        = 1000, # iteraciones del bootstrap
+  cband         = TRUE, # bandas de confianza simultáneas
+  alp           = 0.05, # nivel de significancia: IC al 95%
+  anticipation  = 0,  
+  clustervars   = "id_numerico"    
+)
+
+
+att_TasaHomicidios10_simple <- aggte(TasaHomicidios10has, type = "simple",  na.rm = TRUE)
+att_TasaHomicidios10_es     <- aggte(TasaHomicidios10has, type = "dynamic", na.rm = TRUE,
+                          cband = FALSE, min_e = -7, max_e = 6)
+
+att_TasaLideres10_simple <- aggte(TasaLideres10has, type = "simple",  na.rm = TRUE)
+att_TasaLideres10_es     <- aggte(TasaLideres10has, type = "dynamic", na.rm = TRUE,
+                          cband = FALSE, min_e = -7, max_e = 6)
+
+
+# Modelo Credito Finagro Pequeños Productores 
+
+
+CreditoPeq10ha <- att_gt(
+  yname         = "Y_ln_credito_peq_pc",
+  gname         = "G_i_10",
+  idname        = "id_numerico",
+  tname         = "anio",
+  xformla       = X_Credito,
+  data          = panel_analisis,
+  panel         = TRUE,          
+  est_method    = "dr", # doblemente robusto
+  control_group = "nevertreated", 
+  base_period   = "universal",
+  bstrap        = TRUE, # se por bootstrap
+  biters        = 1000, # iteraciones del bootstrap
+  cband         = TRUE, # bandas de confianza simultáneas
+  alp           = 0.05, # nivel de significancia: IC al 95%
+  anticipation  = 0,  
+  clustervars   = "id_numerico"     
+)
+
+#  Calculamos los efectos dinámicos
+att_creditopeq10_simple <- aggte(CreditoPeq10ha, type = "simple",  na.rm = TRUE)
+att_creditopequ10_es     <- aggte(CreditoPeq10ha, type = "dynamic", na.rm = TRUE,
+                          cband = FALSE, min_e = -7, max_e = 6)
+
+
+# Modelo Credito Valor Mujeres Rurales (global)
+VrfMujer10ha <- att_gt(
+  yname         = "Y_ln_vrf_mujer",
+  gname         = "G_i_10",
+  idname        = "id_numerico",
+  tname         = "anio",
+  xformla       = X_Credito,
+  data          = panel_analisis,
+  panel         = TRUE,
+  est_method    = "dr",
+  control_group = "nevertreated",
+  base_period   = "universal",
+  bstrap        = TRUE,
+  biters        = 1000,
+  cband         = TRUE,
+  alp           = 0.05,
+  anticipation  = 0,
+  clustervars   = "id_numerico"
+)
+
+att_VrfMujer10_simple <- aggte(VrfMujer10ha, type = "simple",  na.rm = TRUE)
+att_VrfMujer10_es     <- aggte(VrfMujer10ha, type = "dynamic", na.rm = TRUE,
+                          cband = FALSE, min_e = -7, max_e = 6)
+
+# Modelo Credito Valor Mujeres Rurales (muestra restringida: sin PNIS & sin PDET)
+VrfMujerSin10ha <- att_gt(
+  yname         = "Y_ln_vrf_mujer",
+  gname         = "G_i_10",
+  idname        = "id_numerico",
+  tname         = "anio",
+  xformla       = X_Credito_nopdet,
+  data          = panel_analisis_mujer_sin,
+  panel         = TRUE,
+  est_method    = "dr",
+  control_group = "nevertreated",
+  base_period   = "universal",
+  bstrap        = TRUE,
+  biters        = 1000,
+  cband         = TRUE,
+  alp           = 0.05,
+  anticipation  = 0,
+  clustervars   = "id_numerico"
+)
+
+att_VrfMujerSin10_simple <- aggte(VrfMujerSin10ha, type = "simple",  na.rm = TRUE)
+att_VrfMujerSin10_es     <- aggte(VrfMujerSin10ha, type = "dynamic", na.rm = TRUE,
+                          cband = FALSE, min_e = -7, max_e = 6)
+
+
+# Modelo coca con solo municipios cocaleros
+
+
+# Corremos el modelo sobre esta nueva base restringida
+Coca10ha <- att_gt(
+  yname         = "Y_ln_coca",
+  gname         = "G_i_10",
+  idname        = "id_numerico",
+  tname         = "anio",
+  xformla       = X_Coca,
+  data          = panel_analisis_coca,  # <--- USAMOS LA BASE RESTRINGIDA
+  panel         = TRUE,          
+  est_method    = "dr",                 # doblemente robusto
+  control_group = "nevertreated",  
+  base_period   = "universal",
+  bstrap        = TRUE,                 # por bootstrap
+  biters        = 1000,                 # iteraciones del bootstrap
+  cband         = TRUE,                 # bandas de confianza simultáneas
+  alp           = 0.05,                 # nivel de significancia: IC al 95%
+  anticipation  = 0,  
+  clustervars   = "id_numerico"         # cluster a nivel municipio
+)
+
+# Calculamos los efectos dinámicos
+att_coca_simple <- aggte(Coca10ha, type = "simple",  na.rm = TRUE)
+att_coca_es     <- aggte(Coca10ha, type = "dynamic", na.rm = TRUE,
+                          cband = FALSE, min_e = -7, max_e = 6)
+
+
+#Coca sin PNIS
+
+CocaSinPNIS10ha <- att_gt(
+  yname         = "Y_ln_coca",
+  gname         = "G_i_10",
+  idname        = "id_numerico",
+  tname         = "anio",
+  xformla       = X_Coca,
+  data          = panel_analisis_coca_sin_pnis,  
+  panel         = TRUE,          
+  est_method    = "dr",                 
+  control_group = "nevertreated",  
+  base_period   = "universal",
+  bstrap        = TRUE,                 
+  biters        = 1000,                 
+  cband         = TRUE,                 
+  alp           = 0.05,                 
+  anticipation  = 0,  
+  clustervars   = "id_numerico"         
+)
+
+att_coca_sin_pnis_simple <- aggte(CocaSinPNIS10ha, type = "simple",  na.rm = TRUE)
+att_coca_sin_pnis_es     <- aggte(CocaSinPNIS10ha, type = "dynamic", na.rm = TRUE,
+                                  cband = FALSE, min_e = -7, max_e = 6)
+
+#_______________________________________________
+#Modelos Sun y Abraham
+#________________________________________________
+
+
+#Tasa de Homicidios
+SA_TasaHomicidios <- feols(
+  tasa_homicidios_md ~ sunab(G_i_10, anio) + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) + 
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio, 
+  data    = panel_analisis, 
+  cluster = ~id_numerico
+)
+
+att_SA_Homicidios_simple <- summary(SA_TasaHomicidios, agg = "att")
+att_SA_Homicidios_es     <- summary(SA_TasaHomicidios)
+
+# Líderes Asesinados
+SA_TasaLideres <- feols(
+  tasa_lideres_asesinados_SD ~ sunab(G_i_10, anio) + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) + 
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio, 
+  data    = panel_analisis, 
+  cluster = ~id_numerico
+)
+
+att_SA_Lideres_simple <- summary(SA_TasaLideres, agg = "att")
+att_SA_Lideres_es     <- summary(SA_TasaLideres)
+
+
+# MODELO CRÉDITO FINAGRO
+
+SA_CreditoPeq <- feols(
+  Y_ln_credito_peq_pc ~ sunab(G_i_10, anio) + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) + 
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio, 
+  data    = panel_analisis, 
+  cluster = ~id_numerico
+)
+
+att_SA_Credito_simple <- summary(SA_CreditoPeq, agg = "att")
+att_SA_Credito_es     <- summary(SA_CreditoPeq)
+
+
+# MODELO CRÉDITO VALOR MUJERES RURALES (global)
+SA_VrfMujer <- feols(
+  Y_ln_vrf_mujer ~ sunab(G_i_10, anio) +
+    i(anio, pdet, ref = 2016) +
+    i(anio, discapital, ref = 2016) +
+    i(anio, indrural, ref = 2016) +
+    i(anio, ln_pobl_rur_2016, ref = 2016) +
+    i(anio, ln_sgp_2016, ref = 2016) +
+    i(anio, ln_homic_pre, ref = 2016) +
+    i(anio, ln_belic_pre, ref = 2016) +
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio,
+  data    = panel_analisis,
+  cluster = ~id_numerico
+)
+
+att_SA_VrfMujer_simple <- summary(SA_VrfMujer, agg = "att")
+att_SA_VrfMujer_es     <- summary(SA_VrfMujer)
+
+# MODELO CRÉDITO VALOR MUJERES RURALES (restringido: sin PNIS & sin PDET)
+# Sin i(anio, pdet): pdet==0 en toda la submuestra.
+SA_VrfMujerSin <- feols(
+  Y_ln_vrf_mujer ~ sunab(G_i_10, anio) +
+    i(anio, discapital, ref = 2016) +
+    i(anio, indrural, ref = 2016) +
+    i(anio, ln_pobl_rur_2016, ref = 2016) +
+    i(anio, ln_sgp_2016, ref = 2016) +
+    i(anio, ln_homic_pre, ref = 2016) +
+    i(anio, ln_belic_pre, ref = 2016) +
+    i(anio, ln_hectareas_coca_pre, ref = 2016) | id_numerico + anio,
+  data    = panel_analisis_mujer_sin,
+  cluster = ~id_numerico
+)
+
+att_SA_VrfMujerSin_simple <- summary(SA_VrfMujerSin, agg = "att")
+att_SA_VrfMujerSin_es     <- summary(SA_VrfMujerSin)
+
+
+# 3. Modelo coca
+
+# Filtramos la base para quedarnos SOLO con municipios cocaleros
+panel_analisis_coca <- panel_analisis %>% filter(coca_pre_raw > 0)
+
+SA_Coca <- feols(
+  Y_ln_coca ~ sunab(G_i_10, anio) + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) | id_numerico + anio, 
+  data    = panel_analisis_coca, 
+  cluster = ~id_numerico
+)
+
+att_SA_Coca_simple <- summary(SA_Coca, agg = "att")
+att_SA_Coca_es     <- summary(SA_Coca)
+
+
+#Modelo Coca (SIN PNIS)
+
+SA_Coca_Sin_PNIS <- feols(
+  Y_ln_coca ~ sunab(G_i_10, anio) + 
+    i(anio, pdet, ref = 2016) + 
+    i(anio, discapital, ref = 2016) + 
+    i(anio, indrural, ref = 2016) + 
+    i(anio, ln_pobl_rur_2016, ref = 2016) + 
+    i(anio, ln_sgp_2016, ref = 2016) + 
+    i(anio, ln_homic_pre, ref = 2016) + 
+    i(anio, ln_belic_pre, ref = 2016) | id_numerico + anio, 
+  data    = panel_analisis_coca_sin_pnis, 
+  cluster = ~id_numerico
+)
+
+att_SA_Coca_Sin_PNIS_simple <- summary(SA_Coca_Sin_PNIS, agg = "att")
+att_SA_Coca_Sin_PNIS_es     <- summary(SA_Coca_Sin_PNIS)
+```
+
+
+Cómo demuestra la la @fig-soporte-comun el supuesto de soporte común se sostiene para las estimaciones realizadas. La \autoref{tab:att} reporta el ATT agregado de la formalización para los cuatro resultados.
+
+Respecto de las hectáreas de cultivos de coca (H1), se observa que la formalización propicia una reducción de estas en los municipios cocaleros, con un ATT de −0.235 (Callaway–Sant'Anna) y −0.213 (Sun–Abraham), ambos significativos al 10%. Esta magnitud equivale a una reducción aproximada del 21% en las hectáreas cultivadas. Como se observa en los estudios de evento (Ver @fig-event-studies), el supuesto de tendencias paralelas se sostiene y el efecto es dinámicamente rezagado, alcanza significancia en el tiempo relativo e=3 (CS: −0.445; SA: −0.401, p<0.05) y e=4 (CS: −0.443, p<0.05; SA: −0.428, p<0.01). Aunque la significancia estadística se disipa en e=5, este factor es atribuible a las pocas cohortes que aportan a esta ventana de observación. Por último, sobresale que  el efecto desaparece al excluir a los municipios PNIS en ambos estimadores.
+
+
+
+```{r}
+#| echo: false
+#| warning: false
+
+library(tidyverse)
+library(kableExtra)
+
+# 1. Extractor para el objeto de Callaway & Sant'Anna (paquete 'did')
+extraer_cs <- function(cs_obj) {
+  att <- cs_obj$overall.att
+  se  <- cs_obj$overall.se
+  p   <- 2 * pnorm(-abs(att / se))
+  stars <- case_when(p < 0.01 ~ "***", p < 0.05 ~ "**", p < 0.10 ~ "*", TRUE ~ "")
+  
+  datos  <- cs_obj$DIDparams$data
+  gname  <- cs_obj$DIDparams$gname
+  idname <- cs_obj$DIDparams$idname
+  
+  n_tratados  <- length(unique(datos[[idname]][datos[[gname]] > 0]))
+  n_controles <- length(unique(datos[[idname]][datos[[gname]] == 0]))
+  
+  tibble(
+    ATT       = sprintf("%.3f%s", att, stars),
+    SE        = sprintf("(%.3f)", se),
+    Tratados  = format(n_tratados, big.mark = ".", decimal.mark = ","),
+    Controles = format(n_controles, big.mark = ".", decimal.mark = ",")
+  )
+}
+
+# 2. Extractor para el objeto de Sun & Abraham (paquete 'fixest')
+extraer_sa <- function(sa_obj) {
+  coefs <- sa_obj$coeftable
+  att <- coefs[1, "Estimate"]
+  se  <- coefs[1, "Std. Error"]
+  p   <- coefs[1, "Pr(>|t|)"]
+  stars <- case_when(p < 0.01 ~ "***", p < 0.05 ~ "**", p < 0.10 ~ "*", TRUE ~ "")
+  
+  tibble(
+    ATT = sprintf("%.3f%s", att, stars),
+    SE  = sprintf("(%.3f)", se)
+  )
+}
+
+# 3. Extractor para el objeto TWFE Clásico (paquete 'fixest')
+extraer_twfe <- function(twfe_obj) {
+  coefs <- twfe_obj$coeftable
+  # Buscamos explícitamente el coeficiente de la dummy de tratamiento D_it
+  att <- coefs["D_it", "Estimate"]
+  se  <- coefs["D_it", "Std. Error"]
+  p   <- coefs["D_it", "Pr(>|t|)"]
+  stars <- case_when(p < 0.01 ~ "***", p < 0.05 ~ "**", p < 0.10 ~ "*", TRUE ~ "")
+  
+  tibble(
+    ATT = sprintf("%.3f%s", att, stars),
+    SE  = sprintf("(%.3f)", se)
+  )
+}
+
+# 4. Extraemos los datos de los 15 modelos (5 variables x 3 estimadores)
+cs_hom  <- extraer_cs(att_TasaHomicidios10_simple)
+cs_lid  <- extraer_cs(att_TasaLideres10_simple)
+cs_cred <- extraer_cs(att_creditopeq10_simple)
+cs_coca <- extraer_cs(att_coca_simple)
+
+sa_hom  <- extraer_sa(att_SA_Homicidios_simple)
+sa_lid  <- extraer_sa(att_SA_Lideres_simple)
+sa_cred <- extraer_sa(att_SA_Credito_simple)
+sa_coca <- extraer_sa(att_SA_Coca_simple)
+
+twfe_hom  <- extraer_twfe(TWFE_TasaHomicidios_simple)
+twfe_lid  <- extraer_twfe(TWFE_TasaLideres_simple)
+twfe_cred <- extraer_twfe(TWFE_Credito_simple)
+twfe_coca <- extraer_twfe(TWFE_Coca_simple)
+
+cs_coca_sin_pnis <- extraer_cs(att_coca_sin_pnis_simple)
+sa_coca_sin_pnis <- extraer_sa(att_SA_Coca_Sin_PNIS_simple)
+twfe_coca_sin_pnis <- extraer_twfe(TWFE_Coca_Sin_PNIS_simple)
+
+# Crédito Valor Mujeres Rurales: global y muestra restringida (sin PNIS & sin PDET)
+cs_vrfm       <- extraer_cs(att_VrfMujer10_simple)
+sa_vrfm       <- extraer_sa(att_SA_VrfMujer_simple)
+twfe_vrfm     <- extraer_twfe(TWFE_VrfMujer_simple)
+cs_vrfm_sin   <- extraer_cs(att_VrfMujerSin10_simple)
+sa_vrfm_sin   <- extraer_sa(att_SA_VrfMujerSin_simple)
+twfe_vrfm_sin <- extraer_twfe(TWFE_VrfMujerSin_simple)
+
+# 4. Ensamblamos el DataFrame incluyendo la nueva fila
+tabla_resultados <- tibble(
+  `Variable Dependiente` = c("Tasa de Homicidios", "",
+                             "Tasa Asesinatos Líderes", "",
+                             "Log(Crédito Pequeño Prod.)", "",
+                             "Log(Crédito Mujeres Rurales)", "",
+                             "Log(Crédito Mujeres - Sin PNIS/PDET)", "",
+                             "Log(Hectáreas Coca)", "",
+                             "Log(Hectáreas Coca - Sin PNIS)", ""),
+  Estadistico = rep(c("ATT", "SE"), 7),
+  `Tratados`  = c(cs_hom$Tratados, "", cs_lid$Tratados, "", cs_cred$Tratados, "", cs_vrfm$Tratados, "", cs_vrfm_sin$Tratados, "", cs_coca$Tratados, "", cs_coca_sin_pnis$Tratados, ""),
+  `Controles` = c(cs_hom$Controles, "", cs_lid$Controles, "", cs_cred$Controles, "", cs_vrfm$Controles, "", cs_vrfm_sin$Controles, "", cs_coca$Controles, "", cs_coca_sin_pnis$Controles, ""),
+  `TWFE`      = c(twfe_hom$ATT, twfe_hom$SE, twfe_lid$ATT, twfe_lid$SE, twfe_cred$ATT, twfe_cred$SE, twfe_vrfm$ATT, twfe_vrfm$SE, twfe_vrfm_sin$ATT, twfe_vrfm_sin$SE, twfe_coca$ATT, twfe_coca$SE, twfe_coca_sin_pnis$ATT, twfe_coca_sin_pnis$SE),
+  `CS`        = c(cs_hom$ATT, cs_hom$SE, cs_lid$ATT, cs_lid$SE, cs_cred$ATT, cs_cred$SE, cs_vrfm$ATT, cs_vrfm$SE, cs_vrfm_sin$ATT, cs_vrfm_sin$SE, cs_coca$ATT, cs_coca$SE, cs_coca_sin_pnis$ATT, cs_coca_sin_pnis$SE),
+  `SA`        = c(sa_hom$ATT, sa_hom$SE, sa_lid$ATT, sa_lid$SE, sa_cred$ATT, sa_cred$SE, sa_vrfm$ATT, sa_vrfm$SE, sa_vrfm_sin$ATT, sa_vrfm_sin$SE, sa_coca$ATT, sa_coca$SE, sa_coca_sin_pnis$ATT, sa_coca_sin_pnis$SE)
+)
+
+# 5. Renderizamos
+tabla_resultados %>%
+  select(-Estadistico) %>% 
+  kbl(
+    col.names = c("Variable Dependiente", "Tratados", "Controles", "TWFE", "CS (2021)", "SA (2021)"),
+    caption = "Efecto Promedio del Tratamiento (ATT) de la Formalización de Tierras ($\\ge 10$ ha)\\label{tab:att}",
+    align = c("l", "c", "c", "c", "c", "c"),
+    booktabs = TRUE, escape = FALSE,
+    linesep = c("", "\\addlinespace", "", "\\addlinespace", "", "\\addlinespace", "", "\\addlinespace", "", "\\addlinespace", "", "\\addlinespace", "", "")
+  ) %>%
+  kable_styling(latex_options = c("HOLD_position", "scale_down"), full_width = FALSE, font_size = 7.5) %>%
+  column_spec(1, width = "4.0cm") %>% 
+  column_spec(4:6, width = "2.8cm") %>% 
+  row_spec(0, bold = TRUE) %>%
+  footnote(
+  general = "Errores estándar clusterizados a nivel municipal. \\\\textbf{Muestra:} Modelos de coca restringidos a cocaleros base. 'Sin PNIS' excluye programas de sustitución. Crédito a mujeres rurales en muestra completa y 'Sin PNIS/PDET' (sin control PDET). \\\\textbf{Controles:} PDET, geo/demografía base, SGP 2016 e historia de conflicto (rezago de coca excluido en su modelo). $^{*}$ p $<$ 0.10, $^{**}$ p $<$ 0.05, $^{***}$ p $<$ 0.01.",
+    threeparttable = TRUE,
+    escape = FALSE
+  )
+```
+
+Respecto del canal financiero (H2), el efecto en el valor del crédito a pequeños productores no es identificable. Si bien el ATT puntual es cercano a cero bajo los dos estimadores, este es el único resultado cuyo estudio de evento viola el supuesto de tendencias paralelas condicionales (la @fig-event-studies). Esto indica que los municipios formalizados transitaban una senda crediticia diferente. El canal sí resulta identificable, en cambio, al focalizarlo en las mujeres rurales (\autoref{tab:att}), en este caso el efecto satisface las tendencias paralelas y  persiste al restringir la muestra a municipios sin PNIS ni PDET con un ATT de 0.362 (Callaway–Sant'Anna, p\<0.01) y 0.273 (Sun–Abraham, p\<0.05), equivalentes a aumentos aproximados del 44% y 31% respectivamente, un efecto atribuible a la formalización en el marco de la RRI. Este hallazgo es consistente con la titularidad compartida obligatoria a favor de la mujer establecida en el Decreto 902 de 2017.
+
+Sobre la violencia letal (H3), ni la tasa de homicidios ni la de asesinatos de líderes sociales presentan efectos significativos bajo ningún estimador, con tendencias paralelas que se sostienen en ambos casos según los estudios de evento. Por lo tanto no se detecta un efecto pacificador ni de incremento de las violencias, por lo menos a nivel agregado, es importante entrar a revisar especificaciones con diferentes categorías de líderes.  
+
+La prueba de sensibilidad (\autoref{tab:sens}) confirma que las dinámicas estimadas no dependen de la definición del tratamiento. La reducción de coca conserva su magnitud al exigir umbrales de formalización crecientes (entre −0.21 y −0.24 en los cuatro cortes), aunque su significancia estadística al 10% solo se sostiene en los umbrales más bajos y se diluye en los más exigentes a medida que la muestra tratada se contrae; lo mismo es observable en el caso de credito sin PNIS ni PDET,  la estabilidad de los estimadores puntuale indica que el efecto no es un artefacto del corte de 10 hectáreas, sino a poder estadistico. En contraste, se evidencia que el ATT de homicidios crece monotónicamente con la intensidad del tratamiento (de 1.04 a 1.89 en CS; de 1.25 a 1.87 en SA), aunque sin ser estadisticamente significativo a ningún umbral.
+
+# Conclusiones 
+
+Este documento evaluó el efecto causal de la formalización de tierras, en el marco de la RRI, sobre las hectáreas de coca, el crédito agropecuario y la violencia en Colombia. Por un lado, la evidencia confirma las observaciones cualitativas de la literatura agraria [@thomson2022]: la titulación por sí misma no reduce los cultivos de uso ilícito. Por otro lado, la investigación demuestra que los derechos de propiedad sí logran activar el canal crediticio, pero de manera exclusiva para las mujeres rurales. En síntesis, los hallazgos subrayan que la formalización no opera en el vacío; la materialización de sus retornos exige complementariedad institucional.
+
+En primer lugar, la reducción identificada en las hectáreas  de coca, con una caída del 21% y significativa al 10% bajo los estimadores robustos a adopción escalonada, operó exclusivamente en los municipios donde la formalización se traslapo con el PNIS. Al excluir esta superposición, el efecto desaparece. Esto refuta la narrativa clásica que asume que la simple tenencia formal disuade la siembra de cultivos de uso ilícito. Como documentan @thomson2022, la premisa de que la coca es un cultivo de corto plazo y baja inversión, ideal para campesinos sin derechos de propiedad formales, es empíricamente falsa, pues establecer un cultivo de coca requiere altas inversiones de capital y trabajo. Los cultivos lícitos suelen fracasar por fricciones de mercado y el título formal no altera esta matriz de rentabilidad. Para que haya efectos se requiere de subsidios, asistencia y bienes públicos  de tal forma que el choque jurídico se traduzca en sustitución efectiva, algunos de estos han sido provistos por el PNIS.
+
+En segundo lugar, sobre el canal crediticio, la violación del supuesto de tendencias paralelas impide cualquier inferencia causal directa respecto de su efecto en pequeños productores. Sin embargo, esta limitación econométrica refleja en sí misma la realidad institucional rural. Los estimadores muestran que los municipios formalizados ya transitaban una senda crediticia diferente antes de la intervención. Este hallazgo cuantitativo es coherente con la evidencia cualitativa que demuestra que en regiones cocaleras el acceso al crédito no está estrictamente condicionado a la posesión de un título formal pues instituciones como el Banco Agrario suelen aceptar certificados de posesión avalados por las Juntas de Acción Comunal  [@thomson2022]. Además, como advierte la literatura institucional y de desarrollo rural [@carter_olinto2003 ; @trebilcock_veel2008], la provisión de títulos de propiedad no incrementa automáticamente la absorción de crédito si persisten estructuras de mercado excluyentes o si los proyectos lícitos son percibidos como riesgosos frente a la rentabilidad de la coca.
+
+En contraste con lo previsto por mi $H_2$, la estimación revela un efecto diferente para mujeres rurales que matiza la idea de que los derechos de propiedad no son suficientes, pues indica que la teoría del capital muerto de @DeSoto2000  se materializa aunque en un grupo  específico. La explicación plausible consiste en que el Decreto 902 de 2017 impulsó la titularidad compartida obligatoria a favor de la mujer, creando un puente legal que convierte el título en colateral, a esto se se añade la integridad de la RRI con programas que facilitan acceso a crédito. No obstante, par  los pequeños productores el título no operaba como restricción vinculante, pues la banca rural ya aceptaba certificados de posesión informales [@thomson2022].En este sentido el canal de De Soto se activó en un contexto donde el título es la restricción que ata y existe un mecanismo que lo traduce en crédito.
+
+Sobre la violencia, la ausencia de efectos estadísticamente significativos en homicidios y asesinatos de líderes sociales bajo los tres estimadores no implica ausencia de tensiones territoriales. La literatura sugiere que los mecanismos pacificador y de contrarreforma pueden operar simultáneamente, mientras la formalización consolida presencia estatal y reduce incentivos para el conflicto [@Albertus2020], también puede detonar represalias de actores armados que ven amenazado su control territorial [@ahmed2025; @prem2018]. Que ambos efectos se anulen en el agregado no descarta que operen heterogéneamente en distintos contextos. Pruebas de heterogeneidad  por presencia de grupos armados, índices de disputa territorial y/o tipolgía de liderazgos sociales permitirían discriminar entre estos mecanismos, este es un paso clave para avances futuros de este trabajo.
+
+En conjunto, los resultados respaldan la lectura de la integralidad en la implementación del Acuerdo de Paz, la formalización entrega resultados solo a través de un complemento, ya sea el PNIS para coca o un mandato legal y complemetariedad de la política  como la titulación de la mujer para el crédito. La principal recomendación de política es que la implementación parcial o desarticulada de la RRI diluye los efectos transofrmadores esperados. 
+
+# Anexos
+
+```{=latex}
+\setcounter{table}{0}
+\renewcommand{\thetable}{A\arabic{table}}
+\setcounter{figure}{0}
+\renewcommand{\thefigure}{A\arabic{figure}}
+```
+
+
+```{r}
+#| echo: false
+
+# TABLA 1: PRE-TREATMENT BALANCE TABLE (BASELINE) 
+#_________________________________________-_-
+library(dplyr)
+library(kableExtra)
+
+# PASO 1: Filtrar el panel estrictamente para 2014, 2015 y 2016  
+datos_baseline <- subset(panel_analisis, anio %in% c(2014, 2015, 2016))
+
+# Definimos las variables de balance
+var_balance <- c(
+  "tasa_homicidios_md", 
+  "tasa_lideres_asesinados_SD", 
+  "tasa_acciones_belicas",
+  "hectareas_coca", 
+  "vrf_peq_pc", 
+  "vrf_mujer_rural",
+  "pobl_rur", 
+  "indrural",
+  "discapital",
+  "SGP_total_mill",
+  "DF_desemp_fisc",
+  "pnis",
+  "pdet"
+)
+
+nombres_balance <- c(
+  "Tasa de homicidios", 
+  "Tasa de asesinato de líderes sociales", 
+  "Tasa de acciones bélicas",
+  "Hectáreas de coca",
+  "Valor de crédito per cápita (pequeños productores)", 
+  "Valor de crédito per cápita (mujer rural)",
+  "Población rural", 
+  "Índice de ruralidad",
+  "Distancia a la capital (km)",
+  "Transferencias del SGP (Millones)",
+  "Desempeño fiscal",
+  "Población en PNIS (\\%)",
+  "Población en PDET (\\%)"
+)
+
+# Matriz vacía para 4 columnas
+resultados_bal <- matrix(ncol = 4, nrow = 0)
+
+# PASO 2: Loop para calcular medias y la Prueba T
+for (i in seq_along(var_balance)) {
+  v <- var_balance[i]
+  
+  g_control <- datos_baseline[[v]][datos_baseline$G_i_10 == 0]
+  g_tratado <- datos_baseline[[v]][datos_baseline$G_i_10 > 0]
+  
+  mean_c <- mean(g_control, na.rm = TRUE)
+  mean_t <- mean(g_tratado, na.rm = TRUE)
+  diff   <- mean_t - mean_c
+  
+  test_res <- tryCatch(
+    t.test(g_tratado, g_control),
+    error = function(e) list(p.value = NA)
+  )
+  pval <- test_res$p.value
+  
+  estrellas <- ""
+  if (!is.na(pval)) {
+    if (pval < 0.01)      estrellas <- "***"
+    else if (pval < 0.05) estrellas <- "**"
+    else if (pval < 0.1)  estrellas <- "*"
+  }
+  
+  diff_str <- paste0(formatC(diff, format = "f", digits = 2), estrellas)
+  
+  fila <- c(nombres_balance[i], 
+            formatC(mean_c, format = "f", digits = 2), 
+            formatC(mean_t, format = "f", digits = 2), 
+            diff_str)
+  
+  resultados_bal <- rbind(resultados_bal, fila)
+}
+
+# PASO 3: Construcción del Dataframe
+tabla_bal_df <- as.data.frame(resultados_bal, stringsAsFactors = FALSE)
+rownames(tabla_bal_df) <- NULL
+
+# --- CONTEOS: municipios únicos (para el encabezado) y obs municipio-año (para la nota) ---
+n_mun_control  <- length(unique(datos_baseline$cod_municipio[datos_baseline$G_i_10 == 0]))
+n_mun_tratados <- length(unique(datos_baseline$cod_municipio[datos_baseline$G_i_10 >  0]))
+
+n_obs_control  <- sum(datos_baseline$G_i_10 == 0, na.rm = TRUE)
+n_obs_tratados <- sum(datos_baseline$G_i_10 >  0, na.rm = TRUE)
+
+# Nombres de columnas: usamos $\infty$ en LaTeX en lugar del símbolo Unicode
+names(tabla_bal_df) <- c("Variable", 
+                         "Nunca tratados (G = $\\infty$)", 
+                         "Alguna vez tratados (G > 10 ha)", 
+                         "Diferencia")
+
+# Vector de header con número de MUNICIPIOS (no observaciones municipio-año)
+header_vec <- c(1, 1, 1, 1)
+names(header_vec) <- c(" ", 
+                       paste0(n_mun_control,  " municipios"),
+                       paste0(n_mun_tratados, " municipios"),
+                       " ")
+
+# PASO 4: Formateo final con kableExtra
+tabla_balance <- tabla_bal_df %>%
+  kbl(
+    caption  = "Tabla de balance pre-tratamiento (2014-2016)\\label{tab:balance}",
+    align    = c("l", "c", "c", "c"),
+    booktabs = TRUE,
+    escape   = FALSE,
+    linesep  = ""
+  ) %>%
+  add_header_above(header_vec, escape = FALSE) %>%
+  kable_styling(
+    latex_options     = c("HOLD_position", "scale_down"),   
+    bootstrap_options = c("hover", "condensed", "striped"),
+    full_width = FALSE,
+    position   = "center",
+    font_size  = 7                                           
+  ) %>%
+  column_spec(1, width = "4.5cm") %>%   # <- reduce de 5.5cm a 4.5cm
+  column_spec(2:4, width = "2.2cm") %>% # <- reduce de 2.8cm a 2.2cm
+  footnote(
+    general = paste0(
+      "Medias de la línea base pre-tratamiento (2014–2016). ",
+  "Tratados ($N=", n_mun_tratados, "$): municipios con $D_i \\\\geq 10$ hectáreas formalizadas (2017–2021). ",
+  "Control ($N=", n_mun_control, "$): municipios nunca tratados. ",
+  "Las diferencias se evaluaron mediante la prueba t de Welch. ",
+  "Significancia: $^{*}$ p $<$ 0.1, $^{**}$ p $<$ 0.05, $^{***}$ p $<$ 0.01."
+    ),
+    general_title  = "Nota: ",
+    threeparttable = TRUE,
+    escape         = FALSE
+  )
+
+tabla_balance
+```
+
+
+```{r}
+#| include: false
+# ==============================================================================
+# ESTIMACIONES SENSIBILIDAD — con base_period="universal" en TODOS los C&S
+# ==============================================================================
+
+# Helper para no repetir 30 veces lo mismo y blindar contra cohortes vacías
+cs_simple <- function(yname, gname, xformla, data) {
+  tryCatch(
+    aggte(
+      att_gt(yname=yname, gname=gname, idname="id_numerico", tname="anio",
+             xformla=xformla, data=data, panel=TRUE, est_method="dr",
+             control_group="nevertreated", base_period="universal",
+             bstrap=TRUE, biters=1000, cband=TRUE, alp=0.05,
+             clustervars="id_numerico"),
+      type="simple", na.rm=TRUE),
+    error = function(e) { message("Fallo CS: ", gname, " / ", yname, " -> ", e$message); NULL }
+  )
+}
+
+sa_simple <- function(yvar, gname, covs, data) {
+  tryCatch({
+    f <- as.formula(paste0(yvar, " ~ sunab(", gname, ", anio) + ", covs,
+                           " | id_numerico + anio"))
+    summary(feols(f, data=data, cluster=~id_numerico), agg="att")
+  }, error = function(e) { message("Fallo SA: ", gname, " / ", yvar, " -> ", e$message); NULL })
+}
+
+covs_v <- "i(anio, pdet, ref=2016) + i(anio, discapital, ref=2016) + i(anio, indrural, ref=2016) + i(anio, ln_pobl_rur_2016, ref=2016) + i(anio, ln_sgp_2016, ref=2016) + i(anio, ln_homic_pre, ref=2016) + i(anio, ln_belic_pre, ref=2016) + i(anio, ln_hectareas_coca_pre, ref=2016)"
+covs_k <- "i(anio, pdet, ref=2016) + i(anio, discapital, ref=2016) + i(anio, indrural, ref=2016) + i(anio, ln_pobl_rur_2016, ref=2016) + i(anio, ln_sgp_2016, ref=2016) + i(anio, ln_homic_pre, ref=2016) + i(anio, ln_belic_pre, ref=2016)"
+# Sin pdet para la muestra restringida sin PNIS & sin PDET
+covs_nopdet <- "i(anio, discapital, ref=2016) + i(anio, indrural, ref=2016) + i(anio, ln_pobl_rur_2016, ref=2016) + i(anio, ln_sgp_2016, ref=2016) + i(anio, ln_homic_pre, ref=2016) + i(anio, ln_belic_pre, ref=2016) + i(anio, ln_hectareas_coca_pre, ref=2016)"
+
+for (k in c(20, 40, 100)) {
+  g <- paste0("G_i_", k)
+  assign(paste0("att_TasaHomicidios", k, "_simple"), cs_simple("tasa_homicidios_md", g, X_Violencia, panel_analisis))
+  assign(paste0("att_TasaLideres", k, "_simple"),    cs_simple("tasa_lideres_asesinados_SD", g, X_Violencia, panel_analisis))
+  assign(paste0("att_creditopeq", k, "_simple"),     cs_simple("Y_ln_credito_peq_pc", g, X_Credito, panel_analisis))
+  assign(paste0("att_VrfMujer", k, "_simple"),       cs_simple("Y_ln_vrf_mujer", g, X_Credito, panel_analisis))
+  assign(paste0("att_VrfMujerSin", k, "_simple"),    cs_simple("Y_ln_vrf_mujer", g, X_Credito_nopdet, panel_analisis_mujer_sin))
+  assign(paste0("att_coca", k, "_simple"),           cs_simple("Y_ln_coca", g, X_Coca, panel_analisis_coca))
+  assign(paste0("att_coca_sin_pnis", k, "_simple"),  cs_simple("Y_ln_coca", g, X_Coca, panel_analisis_coca_sin_pnis))
+
+  assign(paste0("att_SA_Homicidios", k, "_simple"), sa_simple("tasa_homicidios_md", g, covs_v, panel_analisis))
+  assign(paste0("att_SA_Lideres", k, "_simple"),    sa_simple("tasa_lideres_asesinados_SD", g, covs_v, panel_analisis))
+  assign(paste0("att_SA_Credito", k, "_simple"),    sa_simple("Y_ln_credito_peq_pc", g, covs_v, panel_analisis))
+  assign(paste0("att_SA_VrfMujer", k, "_simple"),    sa_simple("Y_ln_vrf_mujer", g, covs_v, panel_analisis))
+  assign(paste0("att_SA_VrfMujerSin", k, "_simple"), sa_simple("Y_ln_vrf_mujer", g, covs_nopdet, panel_analisis_mujer_sin))
+  assign(paste0("att_SA_Coca", k, "_simple"),       sa_simple("Y_ln_coca", g, covs_k, panel_analisis_coca))
+  assign(paste0("att_SA_Coca_Sin_PNIS", k, "_simple"), sa_simple("Y_ln_coca", g, covs_k, panel_analisis_coca_sin_pnis))
+}
+```
+```{r}
+#| echo: false
+#| warning: false
+#Haciendo tabla de sensibilidad 
+
+library(tidyverse)
+library(kableExtra)
+
+# Extractores tolerantes a NULL (devuelven "—" si la estimación falló)
+extraer_cs <- function(cs_obj) {
+  if (is.null(cs_obj)) return(tibble(ATT="—", SE=""))
+  att <- cs_obj$overall.att; se <- cs_obj$overall.se
+  p <- 2*pnorm(-abs(att/se))
+  stars <- case_when(p<0.01~"***", p<0.05~"**", p<0.10~"*", TRUE~"")
+  tibble(ATT=sprintf("%.3f%s", att, stars), SE=sprintf("(%.3f)", se))
+}
+extraer_sa <- function(sa_obj) {
+  if (is.null(sa_obj)) return(tibble(ATT="—", SE=""))
+  c0 <- sa_obj$coeftable
+  att <- c0[1,"Estimate"]; se <- c0[1,"Std. Error"]; p <- c0[1,"Pr(>|t|)"]
+  stars <- case_when(p<0.01~"***", p<0.05~"**", p<0.10~"*", TRUE~"")
+  tibble(ATT=sprintf("%.3f%s", att, stars), SE=sprintf("(%.3f)", se))
+}
+
+# 10 ha (objetos originales, coca sin "10" en el nombre)
+cs_hom_10<-extraer_cs(att_TasaHomicidios10_simple); cs_lid_10<-extraer_cs(att_TasaLideres10_simple)
+cs_cred_10<-extraer_cs(att_creditopeq10_simple);    cs_coca_10<-extraer_cs(att_coca_simple)
+cs_coca_sp_10<-extraer_cs(att_coca_sin_pnis_simple)
+cs_vrfm_10<-extraer_cs(att_VrfMujer10_simple);      cs_vrfm_sin_10<-extraer_cs(att_VrfMujerSin10_simple)
+sa_hom_10<-extraer_sa(att_SA_Homicidios_simple);    sa_lid_10<-extraer_sa(att_SA_Lideres_simple)
+sa_cred_10<-extraer_sa(att_SA_Credito_simple);      sa_coca_10<-extraer_sa(att_SA_Coca_simple)
+sa_coca_sp_10<-extraer_sa(att_SA_Coca_Sin_PNIS_simple)
+sa_vrfm_10<-extraer_sa(att_SA_VrfMujer_simple);     sa_vrfm_sin_10<-extraer_sa(att_SA_VrfMujerSin_simple)
+
+# 20 / 40 / 100 ha
+for (k in c(20,40,100)) {
+  assign(paste0("cs_hom_",k),      extraer_cs(get(paste0("att_TasaHomicidios",k,"_simple"))))
+  assign(paste0("cs_lid_",k),      extraer_cs(get(paste0("att_TasaLideres",k,"_simple"))))
+  assign(paste0("cs_cred_",k),     extraer_cs(get(paste0("att_creditopeq",k,"_simple"))))
+  assign(paste0("cs_vrfm_",k),     extraer_cs(get(paste0("att_VrfMujer",k,"_simple"))))
+  assign(paste0("cs_vrfm_sin_",k), extraer_cs(get(paste0("att_VrfMujerSin",k,"_simple"))))
+  assign(paste0("cs_coca_",k),     extraer_cs(get(paste0("att_coca",k,"_simple"))))
+  assign(paste0("cs_coca_sp_",k),  extraer_cs(get(paste0("att_coca_sin_pnis",k,"_simple"))))
+  assign(paste0("sa_hom_",k),      extraer_sa(get(paste0("att_SA_Homicidios",k,"_simple"))))
+  assign(paste0("sa_lid_",k),      extraer_sa(get(paste0("att_SA_Lideres",k,"_simple"))))
+  assign(paste0("sa_cred_",k),     extraer_sa(get(paste0("att_SA_Credito",k,"_simple"))))
+  assign(paste0("sa_vrfm_",k),     extraer_sa(get(paste0("att_SA_VrfMujer",k,"_simple"))))
+  assign(paste0("sa_vrfm_sin_",k), extraer_sa(get(paste0("att_SA_VrfMujerSin",k,"_simple"))))
+  assign(paste0("sa_coca_",k),     extraer_sa(get(paste0("att_SA_Coca",k,"_simple"))))
+  assign(paste0("sa_coca_sp_",k),  extraer_sa(get(paste0("att_SA_Coca_Sin_PNIS",k,"_simple"))))
+}
+
+# Ensamblador: cada variable ocupa 2 filas (ATT, SE)
+mk <- function(h,l,cr,vm,vms,co,sp) tibble(
+  v=c("Tasa de Homicidios","", "Tasa Asesinatos Líderes","", "Log(Crédito Pequeño Prod.)","",
+      "Log(Crédito Mujeres Rurales)","", "Log(Crédito Mujeres - Sin PNIS/PDET)","",
+      "Log(Hectáreas Coca)","", "Log(Hectáreas Coca - Sin PNIS)",""),
+  c10 =c(h[[1]]$ATT,h[[1]]$SE, l[[1]]$ATT,l[[1]]$SE, cr[[1]]$ATT,cr[[1]]$SE, vm[[1]]$ATT,vm[[1]]$SE, vms[[1]]$ATT,vms[[1]]$SE, co[[1]]$ATT,co[[1]]$SE, sp[[1]]$ATT,sp[[1]]$SE),
+  c20 =c(h[[2]]$ATT,h[[2]]$SE, l[[2]]$ATT,l[[2]]$SE, cr[[2]]$ATT,cr[[2]]$SE, vm[[2]]$ATT,vm[[2]]$SE, vms[[2]]$ATT,vms[[2]]$SE, co[[2]]$ATT,co[[2]]$SE, sp[[2]]$ATT,sp[[2]]$SE),
+  c40 =c(h[[3]]$ATT,h[[3]]$SE, l[[3]]$ATT,l[[3]]$SE, cr[[3]]$ATT,cr[[3]]$SE, vm[[3]]$ATT,vm[[3]]$SE, vms[[3]]$ATT,vms[[3]]$SE, co[[3]]$ATT,co[[3]]$SE, sp[[3]]$ATT,sp[[3]]$SE),
+  c100=c(h[[4]]$ATT,h[[4]]$SE, l[[4]]$ATT,l[[4]]$SE, cr[[4]]$ATT,cr[[4]]$SE, vm[[4]]$ATT,vm[[4]]$SE, vms[[4]]$ATT,vms[[4]]$SE, co[[4]]$ATT,co[[4]]$SE, sp[[4]]$ATT,sp[[4]]$SE)
+)
+cs <- mk(list(cs_hom_10,cs_hom_20,cs_hom_40,cs_hom_100),
+         list(cs_lid_10,cs_lid_20,cs_lid_40,cs_lid_100),
+         list(cs_cred_10,cs_cred_20,cs_cred_40,cs_cred_100),
+         list(cs_vrfm_10,cs_vrfm_20,cs_vrfm_40,cs_vrfm_100),
+         list(cs_vrfm_sin_10,cs_vrfm_sin_20,cs_vrfm_sin_40,cs_vrfm_sin_100),
+         list(cs_coca_10,cs_coca_20,cs_coca_40,cs_coca_100),
+         list(cs_coca_sp_10,cs_coca_sp_20,cs_coca_sp_40,cs_coca_sp_100))
+sa <- mk(list(sa_hom_10,sa_hom_20,sa_hom_40,sa_hom_100),
+         list(sa_lid_10,sa_lid_20,sa_lid_40,sa_lid_100),
+         list(sa_cred_10,sa_cred_20,sa_cred_40,sa_cred_100),
+         list(sa_vrfm_10,sa_vrfm_20,sa_vrfm_40,sa_vrfm_100),
+         list(sa_vrfm_sin_10,sa_vrfm_sin_20,sa_vrfm_sin_40,sa_vrfm_sin_100),
+         list(sa_coca_10,sa_coca_20,sa_coca_40,sa_coca_100),
+         list(sa_coca_sp_10,sa_coca_sp_20,sa_coca_sp_40,sa_coca_sp_100))
+
+tabla_sensibilidad <- tibble(
+  `Variable Dependiente` = cs$v,
+  CS_10=cs$c10, CS_20=cs$c20, CS_40=cs$c40, CS_100=cs$c100,
+  SA_10=sa$c10, SA_20=sa$c20, SA_40=sa$c40, SA_100=sa$c100
+)
+
+tabla_sensibilidad %>%
+  kbl(
+    col.names = c("Dosis de HAs", "≥ 10", "≥ 20", "≥ 40", "≥ 100",
+                  "≥ 10", "≥ 20", "≥ 40", "≥ 100"),
+    caption = "Análisis de Sensibilidad: Efecto Promedio (ATT) según Intensidad de Formalización\\label{tab:sens}",
+    align = c("l", rep("c", 8)), booktabs = TRUE, escape = FALSE,
+    linesep = c("","\\addlinespace","","\\addlinespace","","\\addlinespace","","\\addlinespace","","\\addlinespace","","\\addlinespace","","")
+  ) %>%
+  kable_styling(latex_options = c("HOLD_position","scale_down"), full_width = FALSE, font_size = 7.5) %>%
+  add_header_above(c(" "=1, "Callaway-Sant'Anna (2021)"=4, "Sun-Abraham (2021)"=4),
+                   bold = TRUE) %>%
+  column_spec(1, width="4.2cm") %>%
+  column_spec(2:9, width="1.5cm") %>%
+  row_spec(0, bold = TRUE) %>%
+  footnote(
+  general = "Errores estándar en paréntesis con cluste a nivel municipio. Se evalúa la robustez del ATT variando el umbral de tratamiento ($G_i$). Significancia: $^{*}$ p $<$ 0.10, $^{**}$ p $<$ 0.05, $^{***}$ p $<$ 0.01.",
+    threeparttable = TRUE,
+    escape = TRUE
+  )
+```
+
+
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 7
+#| fig-height: 8
+#| fig-cap: "Estudios de Evento: Efecto de la Formalización de Tierras sobre los Siete Resultados (TWFE, CS y SA)"
+#| label: fig-event-studies
+
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+library(fixest)
+
+# ==============================================================================
+# 1. FUNCIONES EXTRACTORAS DE DATOS (Versión Limpia sin Labels)
+# ==============================================================================
+
+extraer_cs_plot <- function(cs_es) {
+  tibble(
+    e         = cs_es$egt,
+    ATT       = cs_es$att.egt,
+    SE        = cs_es$se.egt,
+    IC_lo     = cs_es$att.egt - 1.96 * cs_es$se.egt,
+    IC_hi     = cs_es$att.egt + 1.96 * cs_es$se.egt,
+    Estimador = "CS (2021) DR"
+  ) %>% 
+    filter(!is.na(SE))
+}
+
+extraer_sa_plot <- function(sa_mod) {
+  ip <- iplot(sa_mod, only.params = TRUE)
+  tibble(
+    e         = as.numeric(ip$prms$x),
+    ATT       = ip$prms$y,
+    IC_lo     = ip$prms$ci_low,
+    IC_hi     = ip$prms$ci_high,
+    Estimador = "SA (2021) TWFE"
+  ) %>% 
+    filter(!ip$prms$is_ref)
+}
+
+extraer_twfe_plot <- function(twfe_mod) {
+  ip <- iplot(twfe_mod, only.params = TRUE)
+  tibble(
+    e         = as.numeric(ip$prms$x),
+    ATT       = ip$prms$y,
+    IC_lo     = ip$prms$ci_low,
+    IC_hi     = ip$prms$ci_high,
+    Estimador = "TWFE Clásico"
+  ) %>% 
+    filter(!ip$prms$is_ref)
+}
+
+# ==============================================================================
+# 2. FUNCIÓN GENERADORA DEL GRÁFICO 
+# ==============================================================================
+
+crear_grafico_superpuesto <- function(cs_es, sa_mod, twfe_mod, titulo, ylab) {
+  
+  df_cs   <- extraer_cs_plot(cs_es)
+  df_sa   <- extraer_sa_plot(sa_mod)
+  df_twfe <- extraer_twfe_plot(twfe_mod)
+  
+  df_plot <- bind_rows(df_twfe, df_cs, df_sa) %>%
+    filter(e >= -7 & e <= 5) %>%
+    mutate(Estimador = factor(Estimador, levels = c("TWFE Clásico", "CS (2021) DR", "SA (2021) TWFE")))
+  
+  ggplot(df_plot, aes(x = e, y = ATT, color = Estimador, shape = Estimador)) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.6) +
+    geom_vline(xintercept = -0.5, linetype = "dotted", color = "gray40", linewidth = 0.6) +
+    
+    geom_linerange(aes(ymin = IC_lo, ymax = IC_hi), 
+                   position = position_dodge(width = 0.65), alpha = 0.6, linewidth = 0.8) +
+    geom_point(position = position_dodge(width = 0.65), 
+               size = 2.2, fill = "white", stroke = 1.2) +
+    
+    scale_color_manual(values = c("TWFE Clásico" = "#525252", "CS (2021) DR" = "#2166AC", "SA (2021) TWFE" = "#B2182B")) +
+    scale_shape_manual(values = c("TWFE Clásico" = 22, "CS (2021) DR" = 21, "SA (2021) TWFE" = 24)) +
+    scale_x_continuous(breaks = -7:5) +
+    
+    theme_minimal(base_size = 11) +
+    theme(
+      legend.position  = "bottom",
+      legend.title     = element_blank(),
+      plot.title       = element_text(face = "bold", size = 11),
+      axis.title.x     = element_blank(), 
+      panel.grid.minor = element_blank()
+    ) +
+    labs(title = titulo, y = ylab)
+}
+
+# ==============================================================================
+# 3. CREACIÓN DE LOS 5 GRÁFICOS INDIVIDUALES
+# ==============================================================================
+
+g_hom <- crear_grafico_superpuesto(
+  cs_es    = att_TasaHomicidios10_es, 
+  sa_mod   = SA_TasaHomicidios, 
+  twfe_mod = TWFE_TasaHomicidios_es,
+  titulo   = "A. Tasa de Homicidios", 
+  ylab     = "ATT"
+)
+
+g_lid <- crear_grafico_superpuesto(
+  cs_es    = att_TasaLideres10_es, 
+  sa_mod   = SA_TasaLideres, 
+  twfe_mod = TWFE_TasaLideres_es,
+  titulo   = "B. Tasa Asesinatos Líderes", 
+  ylab     = "ATT"
+)
+
+g_cred <- crear_grafico_superpuesto(
+  cs_es    = att_creditopequ10_es,
+  sa_mod   = SA_CreditoPeq,
+  twfe_mod = TWFE_Credito_es,
+  titulo   = "C. Log(Crédito Pequeño Productor)",
+  ylab     = "ATT"
+)
+
+g_vrfm <- crear_grafico_superpuesto(
+  cs_es    = att_VrfMujer10_es,
+  sa_mod   = SA_VrfMujer,
+  twfe_mod = TWFE_VrfMujer_es,
+  titulo   = "D. Log(Crédito Mujeres Rurales)",
+  ylab     = "ATT"
+)
+
+g_vrfm_sin <- crear_grafico_superpuesto(
+  cs_es    = att_VrfMujerSin10_es,
+  sa_mod   = SA_VrfMujerSin,
+  twfe_mod = TWFE_VrfMujerSin_es,
+  titulo   = "E. Crédito Mujeres - Sin PNIS/PDET",
+  ylab     = "ATT"
+)
+
+g_coca <- crear_grafico_superpuesto(
+  cs_es    = att_coca_es,
+  sa_mod   = SA_Coca,
+  twfe_mod = TWFE_Coca_es,
+  titulo   = "F. Log(Hectáreas Coca)",
+  ylab     = "ATT"
+)
+
+g_coca_sin_pnis <- crear_grafico_superpuesto(
+  cs_es    = att_coca_sin_pnis_es,
+  sa_mod   = SA_Coca_Sin_PNIS,
+  twfe_mod = TWFE_Coca_Sin_PNIS_es,
+  titulo   = "G. Log(Hectáreas Coca - Sin PNIS)",
+  ylab     = "ATT"
+)
+
+# ==============================================================================
+# 4. ENSAMBLAJE DEL PANEL CON PATCHWORK
+# ==============================================================================
+
+# 7 paneles: última fila usa plot_spacer() para rellenar el hueco de la derecha
+grafico_final_panel <- (g_hom | g_lid) /
+                       (g_cred | g_vrfm) /
+                       (g_vrfm_sin | g_coca) /
+                       (g_coca_sin_pnis | plot_spacer()) +
+  plot_layout(guides = "collect") +
+  plot_annotation(
+    subtitle = "Estimadores TWFE Clásico, Callaway–Sant'Anna (2021) y Sun–Abraham (2021). Umbral de tratamiento: $D_i \\geq 10$ ha.",
+    caption  = "Nota: Intervalos de confianza al 95% puntuales. La línea vertical punteada señala el último período pre-tratamiento (e = −1). Muestra: municipios cocaleros para paneles F y G; municipios sin PNIS ni PDET para el panel E.",
+    theme = theme(
+      plot.title    = element_text(face = "bold", size = 11, hjust = 0),
+      plot.subtitle = element_text(size = 9, color = "gray30", hjust = 0),
+      legend.position = "bottom",
+      plot.caption    = element_text(hjust = 0, size = 9, color = "gray30")
+    )
+    )
+
+print(grafico_final_panel)
+```
+
+```{r}
+#| label: fig-soporte-comun
+#| fig-cap: "Verificación del supuesto de soporte común del IPW por cohorte de tratamiento. Cada panel muestra la distribución del propensity score estimado para tratados y nunca tratados."
+#| echo: false
+#| warning: false
+#| fig-width: 7
+#| fig-height: 5
+#| out-width: "100%"
+
+library(tidyverse)
+library(patchwork)
+
+covs_vc <- c("pdet", "discapital", "indrural", "ln_pobl_rur_2016",
+             "ln_sgp_2016", "ln_homic_pre", "ln_belic_pre", "ln_hectareas_coca_pre")
+covs_c  <- c("pdet", "discapital", "indrural", "ln_pobl_rur_2016",
+             "ln_sgp_2016", "ln_homic_pre", "ln_belic_pre")
+
+# ── helper: PS por cohorte ────────────────────────────────────────────────────
+hacer_ps <- function(base, never, g, covs) {
+  df <- bind_rows(base %>% filter(G_i_10 == g) %>% mutate(D = 1L),
+                  never                          %>% mutate(D = 0L))
+  df$ps     <- predict(glm(as.formula(paste("D ~", paste(covs, collapse = "+"))),
+                           data = df, family = binomial()), type = "response")
+  df$cohort <- paste0("G=", g)
+  df$grupo  <- if_else(df$D == 1, "Tratados", "Nunca tratados")
+  df %>% select(ps, cohort, grupo)
+}
+
+# ── Panel completo ────────────────────────────────────────────────────────────
+base_full  <- panel_analisis %>% filter(anio == 2016) %>%
+  distinct(id_numerico, .keep_all = TRUE) %>% drop_na(all_of(covs_vc), G_i_10)
+never_full <- base_full %>% filter(G_i_10 == 0)
+
+ps_full <- bind_rows(
+  hacer_ps(base_full, never_full, 2017, covs_vc),
+  hacer_ps(base_full, never_full, 2018, covs_vc),
+  hacer_ps(base_full, never_full, 2019, covs_vc),
+  hacer_ps(base_full, never_full, 2020, covs_vc),
+  hacer_ps(base_full, never_full, 2021, covs_vc)
+)
+
+# ── Panel coca con PNIS ───────────────────────────────────────────────────────
+base_coca  <- panel_analisis_coca %>% filter(anio == 2016) %>%
+  distinct(id_numerico, .keep_all = TRUE) %>% drop_na(all_of(covs_c), G_i_10)
+never_coca <- base_coca %>% filter(G_i_10 == 0)
+
+ps_coca <- bind_rows(
+  hacer_ps(base_coca, never_coca, 2017, covs_c),
+  hacer_ps(base_coca, never_coca, 2018, covs_c),
+  hacer_ps(base_coca, never_coca, 2019, covs_c),
+  hacer_ps(base_coca, never_coca, 2020, covs_c),
+  hacer_ps(base_coca, never_coca, 2021, covs_c)
+)
+
+# ── Panel coca sin PNIS ───────────────────────────────────────────────────────
+base_sp  <- panel_analisis_coca_sin_pnis %>% filter(anio == 2016) %>%
+  distinct(id_numerico, .keep_all = TRUE) %>% drop_na(all_of(covs_c), G_i_10)
+never_sp <- base_sp %>% filter(G_i_10 == 0)
+
+ps_sp <- bind_rows(
+  hacer_ps(base_sp, never_sp, 2017, covs_c),
+  hacer_ps(base_sp, never_sp, 2018, covs_c),
+  hacer_ps(base_sp, never_sp, 2019, covs_c),
+  hacer_ps(base_sp, never_sp, 2020, covs_c),
+  hacer_ps(base_sp, never_sp, 2021, covs_c)
+)
+
+# ── Función de gráfica ────────────────────────────────────────────────────────
+graficar <- function(datos, titulo) {
+  ggplot(datos, aes(x = ps, fill = grupo, color = grupo)) +
+    geom_density(alpha = 0.35, linewidth = 0.6) +
+    facet_wrap(~ cohort, ncol = 5, scales = "free_y") +
+    scale_x_continuous(limits = c(0, 1), breaks = c(0, 0.5, 1)) +
+    scale_fill_manual(values  = c("Tratados" = "#C0392B", "Nunca tratados" = "#2980B9")) +
+    scale_color_manual(values = c("Tratados" = "#C0392B", "Nunca tratados" = "#2980B9")) +
+    labs(title = titulo, x = expression(hat(p)(X)), y = "Densidad",
+         fill = NULL, color = NULL) +
+    theme_minimal(base_size = 8) +
+    theme(legend.position  = "none",
+          strip.text       = element_text(face = "bold", size = 7),
+          plot.title       = element_text(face = "bold", size = 8),
+          axis.text        = element_text(size = 6),
+          panel.grid.minor = element_blank())
+}
+
+p1 <- graficar(ps_full, "A.  Violencia y Crédito")
+p2 <- graficar(ps_coca, "B.  Coca (con PNIS)")
+p3 <- graficar(ps_sp,   "C.  Coca (sin PNIS)")
+
+# Leyenda compartida al fondo
+leyenda <- ggplot(ps_full, aes(x = ps, fill = grupo, color = grupo)) +
+  geom_density(alpha = 0.35) +
+  scale_fill_manual(values  = c("Tratados" = "#C0392B", "Nunca tratados" = "#2980B9")) +
+  scale_color_manual(values = c("Tratados" = "#C0392B", "Nunca tratados" = "#2980B9")) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        legend.title    = element_blank(),
+        legend.text     = element_text(size = 8))
+
+leg <- cowplot::get_legend(leyenda)
+
+(p1 / p2 / p3 / leg) + plot_layout(heights = c(1, 1, 1, 0.12))
+```
+
+
+```{r}
+#| include: false
+# ==============================================================================
+# TABLE A1: PANEL SUMMARY STATISTICS (Apéndice A)
+# ==============================================================================
+# Reporta N, media, SD, mediana, min, max y % de NA para todo el panel
+# (2012-2023), separando por grupo de tratamiento.
+# ==============================================================================
+
+library(dplyr)
+library(kableExtra)
+
+# Variables descriptivas (incluye el tratamiento)
+var_datos_desc <- c(
+  "tasa_homicidios_md",
+  "tasa_lideres_asesinados_SD",
+  "tasa_acciones_belicas",
+  "hectareas_coca",
+  "vrf_peq_pc",
+  "pobl_rur",
+  "indrural",
+  "discapital",
+  "SGP_total_mill",
+  "DF_desemp_fisc",
+  "pnis",
+  "pdet",
+  "hectareas_formalizadas"
+)
+
+var_nombres_desc <- c(
+  "Homicide rate",
+  "Social leaders assassination rate",
+  "Armed clashes rate",
+  "Coca hectares",
+  "Smallholder credit (per capita)",
+  "Rural population",
+  "Rurality index",
+  "Distance to capital (km)",
+  "SGP transfers (Millions)",
+  "Fiscal performance",
+  "Population in PNIS (%)",
+  "Population in PDET (%)",
+  "Formalized hectares"
+)
+
+# Función auxiliar para calcular el bloque de estadísticas de un grupo
+calc_stats <- function(x) {
+  x_clean <- x[!is.na(x)]
+  if (length(x_clean) == 0) {
+    return(c(0, NA, NA, NA, NA, NA))
+  }
+  c(
+    N      = length(x_clean),
+    Mean   = mean(x_clean),
+    SD     = sd(x_clean),
+    Median = median(x_clean),
+    Min    = min(x_clean),
+    Max    = max(x_clean)
+  )
+}
+
+# Matriz: 1 col Variable + 6 cols control + 6 cols tratado = 13
+resultados_desc <- matrix(ncol = 13, nrow = 0)
+
+for (i in seq_along(var_datos_desc)) {
+  v <- var_datos_desc[i]
+
+  datos_control  <- panel_analisis[[v]][panel_analisis$G_i_10 == 0]
+  datos_tratados <- panel_analisis[[v]][panel_analisis$G_i_10 >  0]
+
+  stats_c <- calc_stats(datos_control)
+  stats_t <- calc_stats(datos_tratados)
+
+  fila <- c(
+    var_nombres_desc[i],
+    stats_c["N"],
+    formatC(stats_c["Mean"],   format = "f", digits = 2),
+    formatC(stats_c["SD"],     format = "f", digits = 2),
+    formatC(stats_c["Median"], format = "f", digits = 2),
+    formatC(stats_c["Min"],    format = "f", digits = 2),
+    formatC(stats_c["Max"],    format = "f", digits = 2),
+    stats_t["N"],
+    formatC(stats_t["Mean"],   format = "f", digits = 2),
+    formatC(stats_t["SD"],     format = "f", digits = 2),
+    formatC(stats_t["Median"], format = "f", digits = 2),
+    formatC(stats_t["Min"],    format = "f", digits = 2),
+    formatC(stats_t["Max"],    format = "f", digits = 2)
+  )
+
+  resultados_desc <- rbind(resultados_desc, fila)
+}
+
+# Construcción del dataframe
+tabla_desc_df <- as.data.frame(resultados_desc, stringsAsFactors = FALSE)
+rownames(tabla_desc_df) <- NULL
+
+# Nombres de columnas (con espacios para evitar duplicados en R)
+names(tabla_desc_df) <- c(
+  "Variable",
+  "N",  "Mean",  "SD",  "Median",  "Min",  "Max",
+  "N ", "Mean ", "SD ", "Median ", "Min ", "Max "
+)
+
+# N total de municipios únicos por grupo (más informativo que filas-año)
+n_mun_control  <- length(unique(
+  panel_analisis$cod_municipio[panel_analisis$G_i_10 == 0]
+))
+n_mun_tratados <- length(unique(
+  panel_analisis$cod_municipio[panel_analisis$G_i_10 >  0]
+))
+
+# Cabeceras dinámicas: 1 col Variable + 6 control + 6 tratado
+cabeceras_dinamicas <- c(1, 6, 6)
+names(cabeceras_dinamicas) <- c(
+  " ",
+  paste0("Never Treated (G = ∞) — ", n_mun_control,  " municipalities"),
+  paste0("Ever Treated (G > 10 ha) — ", n_mun_tratados, " municipalities")
+)
+
+# ------------------------------------------------------------------
+# Construcción de la tabla
+# ------------------------------------------------------------------
+tabla_descriptiva <- tabla_desc_df %>%
+  kbl(
+    align   = c("l", rep("c", 12)),
+    caption = "Table A1: Panel Summary Statistics (2012-2023)",
+    booktabs = TRUE
+  ) %>%
+  add_header_above(cabeceras_dinamicas) %>%
+  kable_styling(
+    latex_options     = c("hold_position", "scale_down"),
+    bootstrap_options = c("hover", "condensed", "striped"),
+    full_width = FALSE,
+    position   = "center",
+    font_size  = 8.5
+  ) %>%
+  footnote(
+    general = paste(
+      general = "Summary statistics for the full panel period (2012-2023). N reports the number of non-missing municipality-year observations per variable. Treatment groups are defined by the cumulative dose threshold: Ever Treated municipalities have D_i >= 10 hectares formalized within the three-year post-cohort window, while Never Treated have G_i = infinity. Municipalities with 0 < D_i < 10 are excluded to avoid ambiguity."
+    ),
+    general_title = "Note: ",
+    threeparttable = TRUE
+  )
+
+tabla_descriptiva
+```
+
+
+
+
+
+
+
+
+
+
+
+\clearpage
+# References {.unnumbered}
