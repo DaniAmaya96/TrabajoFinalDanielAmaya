@@ -25,13 +25,10 @@ Si su objetivo es revisar o replicar los modelos econométricos y generar el PDF
 Si deseas reconstruir el panel principal de datos (`panel_tierras_violencia_final.csv`) desde las fuentes originales, sigue estos pasos:
 
 1. Dirígete a la siguiente carpeta de Google Drive: [Repositorio de Bases de Datos Originales](https://drive.google.com/drive/folders/1WdurRoyh2Vh24rdbDVRblZqy7Q75WYht?usp=share_link)
-2. Descarga la carpeta completa. Obtendrás dos archivos principales:
+2. Descarga la carpeta completa donde encontrarás: 
    * Un archivo comprimido: `RRI Formalización Construcción Base de Datos-20260529T024614Z-3-002.zip`
-   * Un archivo de datos: `REPORTE_VICTIMAS_DESPLAZAMIENTO_ANUALIZADO_OCURRENCIA_Y_LLEGADA__MUNICIPALES_20260227.csv`
 3. Extrae el contenido del archivo `.zip` en una carpeta de tu computadora.
-4. Mueve el archivo `.csv` (el reporte de desplazamiento) e intégralo dentro de la carpeta extraída junto al resto de las bases, cerciorate que el nombre sea
-el mencionado en el paso 2, si no corrigelo.
-5. Abre el script `contruyendo_panel_tierras_violencia_final.R`, recuerda todo debe estar en la misma carpeta.
+5. Abre el script `contruyendo_panel_tierras_violencia_final.R`.
 6. **Paso fundamental:** Define el *Working Directory*  en esa carpeta. En RStudio ve a: `Session` > `Set Working Directory` y escoge como directorio la carpeta que descargaste.  
 7. Corre todo el script. Al finalizar, el panel consolidado se exportará automáticamente en esa misma carpeta.
 
