@@ -2,7 +2,7 @@
 
 **Autor:** Daniel Ricardo Amaya Alba
 
-Este repositorio contiene el paquete de replicación, la base de datos consolidada y el documento final del trabajo de grado. 
+Este repositorio contiene el paquete de replicación, la base de datos consolidada y el documento final. 
 
 ##  Contenido del Repositorio
 
